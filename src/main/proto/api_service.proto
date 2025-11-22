@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+option java_package = "com.chainofproduct.grpc";
+option java_outer_classname = "ApiServiceProto";
+
+
+message TransactionRequest {
+  string host = 1;
+  int32 port = 2;
+  string privKeyFile = 3;
+  string receiverPubKeyFile = 4;
+  string dataFile = 5;
+}
+
+message ShareRequest {
+  string host = 1;
+  int32 port = 2;
+  string privKeyFile = 3;
+  string receiverPubKeyFile = 4;
+  string dataFile = 5;
+}
+
+message TransactiRecive {
+  string dataFile = 1;
+}
+
+
+message ShareRecive {
+  string dataFile = 1;
+}
+
+message ApiReply{
+    bool ack = 1; 
+}
+
+
+
+service ApiService {
+  rpc SendTransaction (TransactionRequest) returns (ApiReply);
+  rpc SendShare (ShareRequest) returns (ApiReply);
+  rpc ReceiveTransaction (TransactiRecive) returns (ApiReply);
+  rpc ReceiveShare (ShareRecive) returns (ApiReply);
+}
+

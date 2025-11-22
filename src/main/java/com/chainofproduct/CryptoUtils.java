@@ -294,7 +294,7 @@ public class CryptoUtils {
         System.out.println("HMAC key generated and saved to keys/" + outputFile);
     }
 
-    private static SecretKey readKeyFromFile(String file, String algorithm) throws Exception {
+    public static SecretKey readKeyFromFile(String file, String algorithm) throws Exception {
         String b64 = java.nio.file.Files.readString(java.nio.file.Paths.get(file));
         byte[] keyBytes = Base64.getDecoder().decode(b64.trim());
         return new SecretKeySpec(keyBytes, algorithm);
