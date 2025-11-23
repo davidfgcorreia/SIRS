@@ -2,7 +2,9 @@ package com.chainofproduct.server;
 
 import java.io.*;
 import javax.net.ssl.*;
-import com.chainofproduct.CryptoUtils;
+
+import com.chainofproduct.utils.CryptoUtils;
+
 import javax.crypto.SecretKey;
 import java.security.PrivateKey;
 import java.security.PublicKey;

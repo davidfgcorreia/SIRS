@@ -1,4 +1,4 @@
-package com.chainofproduct;
+package com.chainofproduct.utils;
 
 
 import javax.crypto.Cipher;
@@ -278,6 +278,8 @@ public class CryptoUtils {
         java.nio.file.Files.write(java.nio.file.Paths.get(outputFile), decrypted);
         System.out.println("File unprotected and written to " + outputFile);
     }
+
+    //key generation directories are in the wrong place
     private static void cliGenerateAESKey(String outputFile) throws Exception {
         SecretKey key = generateAESKey(256);
         String b64 = Base64.getEncoder().encodeToString(key.getEncoded());
