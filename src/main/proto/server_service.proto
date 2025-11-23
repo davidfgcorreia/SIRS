@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+option java_package = "com.chainofproduct.grpc";
+option java_outer_classname = "ServerServiceProto";
+
+// Request to send a transaction (file to send, and destination identifier)
+message SendTransactionRequest {
+  string data_file = 1; // Path or content of the file to send
+  string destination = 2; // Destination identifier (e.g., host or user)
+}
+
+// Response for send transaction
+message SendTransactionReply {
+  bool success = 1;
+  string message = 2;
+}
+
+// Request to get a transaction by ID
+message GetTransactionByIdRequest {
+  int64 transaction_id = 1;
+}
+
+// Response with transaction details
+message TransactionRecord {
+  int64 id = 1;
+  int64 timestamp = 2;
+  string seller = 3;
+  string buyer = 4;
+  string product = 5;
+  int64 units = 6;
+  int64 amount = 7;
+}
+
+// Request to get all transactions
+message GetAllTransactionsRequest {}
+
+// Response with a list of transactions
+message GetAllTransactionsReply {
+  repeated TransactionRecord transactions = 1;
+}
+
+// Request to get shares for a transaction
+message GetSharesRequest {
+  int64 transaction_id = 1;
+}
+
+// Response with a list of shares
+message GetSharesReply {
+  repeated string shares = 1;
+}
+
+// Request to get shares by who shared
+message GetSharesBySharedByRequest {
+  int64 transaction_id = 1;
+  string shared_by = 2; // 'seller' or 'buyer'
+}
+
+// Response with a list of shares (same as GetSharesReply)
+// message GetSharesBySharedByReply { repeated string shares = 1; } // Can reuse GetSharesReply
+
+service ServerService {
+  // Send a transaction (file, destination)
+  rpc RequestSend (SendTransactionRequest) returns (SendTransactionReply);
+
+  // Get a transaction by ID
+  rpc GetTransactionById (GetTransactionByIdRequest) returns (TransactionRecord);
+
+  // Get all transactions
+  rpc GetAllTransactions (GetAllTransactionsRequest) returns (GetAllTransactionsReply);
+
+  // Get all shares for a transaction
+  rpc GetShares (GetSharesRequest) returns (GetSharesReply);
+
+  // Get shares for a transaction by who shared
+  rpc GetSharesBySharedBy (GetSharesBySharedByRequest) returns (GetSharesReply);
+}
+

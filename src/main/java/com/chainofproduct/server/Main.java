@@ -1,4 +1,4 @@
-package com.chainofproduct.api;
+package com.chainofproduct.server;
 
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
@@ -44,7 +44,7 @@ public class Main {
         // Start gRPC server
         int grpcPort = 50051; // Default gRPC port
         Server grpcServer = ServerBuilder.forPort(grpcPort)
-                .addService(new ApiServiceImpl(sendQueue, sendLock))
+                .addService(new ServerServiceImpl(sendQueue, sendLock))
                 .build()
                 .start();
         System.out.println("gRPC API server started, listening on port " + grpcPort);

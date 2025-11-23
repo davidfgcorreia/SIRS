@@ -1,4 +1,4 @@
-package com.chainofproduct.api;
+package com.chainofproduct.server;
 
 public class Request {
     private final String host;
