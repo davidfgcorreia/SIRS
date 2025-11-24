@@ -36,7 +36,7 @@ public class ApiServer {
             out.writeLong(timestamp);
             out.writeInt(signature.length);
             out.write(signature);
-            byte[] senderPubBytes = receiverPublicKey.getEncoded(); // For demo, use receiver's pubkey as sender's pubkey
+            byte[] senderPubBytes = senderPrivateKey.getPublic().getEncoded(); // For demo, use receiver's pubkey as sender's pubkey
             out.writeInt(senderPubBytes.length);
             out.write(senderPubBytes);
             out.flush();
@@ -52,14 +52,11 @@ public class ApiServer {
             in.readFully(encryptedSessionKeys);
             byte[] sessionKeys = asymmetricDecrypt(encryptedSessionKeys, senderPrivateKey, receiverPublicKey);
             byte[] aesKeyBytes = new byte[32];
-            byte[] hmacKeyBytes = new byte[32];
             System.arraycopy(sessionKeys, 0, aesKeyBytes, 0, 32);
-            System.arraycopy(sessionKeys, 32, hmacKeyBytes, 0, 32);
             SecretKey aesKey = new javax.crypto.spec.SecretKeySpec(aesKeyBytes, "AES");
-            SecretKey hmacKey = new javax.crypto.spec.SecretKeySpec(hmacKeyBytes, "HmacSHA256");
             // --- 4. Encrypt and send data ---
             byte[] data = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(dataFile));
-            String encryptedData = CryptoUtils.encrypt(data, aesKey, hmacKey);
+            String encryptedData = CryptoUtils.encrypt(data, aesKey);
             out.writeUTF("SEND_TRANSACTION");
             byte[] encBytes = encryptedData.getBytes();
             out.writeInt(encBytes.length);
@@ -108,12 +105,8 @@ public class ApiServer {
 
             // --- 2. Receiver generates session keys and sends them encrypted with sender's public key ---
             SecretKey aesKey = CryptoUtils.generateAESKey(256);
-            SecretKey hmacKey = CryptoUtils.generateHMACKey();
             byte[] aesKeyBytes = aesKey.getEncoded();
-            byte[] hmacKeyBytes = hmacKey.getEncoded();
-            byte[] sessionKeys = new byte[aesKeyBytes.length + hmacKeyBytes.length];
-            System.arraycopy(aesKeyBytes, 0, sessionKeys, 0, aesKeyBytes.length);
-            System.arraycopy(hmacKeyBytes, 0, sessionKeys, aesKeyBytes.length, hmacKeyBytes.length);
+            byte[] sessionKeys = aesKeyBytes; // Only AES key needed now
             byte[] encryptedSessionKeys = asymmetricEncrypt(sessionKeys, senderPublicKey, null);
             out.writeInt(encryptedSessionKeys.length);
             out.write(encryptedSessionKeys);
@@ -124,7 +117,7 @@ public class ApiServer {
             int payloadLen = in.readInt();
             byte[] encryptedPayload = new byte[payloadLen];
             in.readFully(encryptedPayload);
-            byte[] decryptedPayload = CryptoUtils.decrypt(new String(encryptedPayload), aesKey, hmacKey, 5 * 60 * 1000);
+            byte[] decryptedPayload = CryptoUtils.decrypt(new String(encryptedPayload), aesKey, 5 * 60 * 1000);
 
             // --- 4. Receiver processes data and sends ACK ---
             switch (command) {
