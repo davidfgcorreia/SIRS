@@ -1,4 +1,5 @@
 package com.chainofproduct.server;
+package com.chainofproduct.server;
 
 import com.chainofproduct.db.DatabaseOperations;
 import com.fasterxml.jackson.databind.JsonNode;
