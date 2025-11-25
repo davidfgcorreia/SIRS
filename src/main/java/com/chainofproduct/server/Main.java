@@ -1,5 +1,6 @@
 package com.chainofproduct.server;
 
+import com.chainofproduct.utils.CryptoUtils;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import java.util.concurrent.BlockingQueue;
@@ -7,6 +8,13 @@ import java.util.concurrent.LinkedBlockingQueue;
 
 public class Main {
     public static void main(String[] args) throws Exception {
+        // Initialize CryptoUtils to ensure replay-protection timer and nonce map are started
+        try {
+            CryptoUtils.generateNonce();
+            System.out.println("CryptoUtils initialized (replay protection active).");
+        } catch (Throwable t) {
+            System.err.println("Warning: failed to initialize CryptoUtils: " + t.getMessage());
+        }
         // Shared queue and lock for sender requests
         BlockingQueue<Request> sendQueue = new LinkedBlockingQueue<>();
         Object sendLock = new Object();
@@ -69,11 +77,16 @@ public class Main {
                         // Type 1 = transaction, Type 2 = share
                         Runnable sendTask = () -> {
                             try {
-                                if (req.getType() == 1) {
-                                    ApiServer.actAsSender(req.getHost(), req.getPort(), req.getPrivKeyFile(), req.getReceiverPubKeyFile(), req.getDataFile());
-                                } else if (req.getType() == 2) {
-                                    // For share, use same sender logic, but could be extended
-                                    ApiServer.actAsSender(req.getHost(), req.getPort(), req.getPrivKeyFile(), req.getReceiverPubKeyFile(), req.getDataFile());
+                                if (req.getType() == 1 || req.getType() == 2) {
+                                    // Updated: pass senderPrivKeyFile, senderPubKeyFile, receiverPubKeyFile, dataFile
+                                    ApiServer.actAsSender(
+                                        req.getHost(),
+                                        req.getPort(),
+                                        req.getPrivKeyFile(),
+                                        req.getPubKeyFile(),
+                                        req.getReceiverPubKeyFile(),
+                                        req.getDataFile()
+                                    );
                                 }
                             } catch (Exception e) {
                                 e.printStackTrace();

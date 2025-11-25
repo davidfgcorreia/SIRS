@@ -1,5 +1,4 @@
 package com.chainofproduct.server;
-package com.chainofproduct.server;
 
 import com.chainofproduct.db.DatabaseOperations;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -45,9 +44,10 @@ public class ServerOperations {
         }
 
         // Try to parse destination
-        String[] parts = destination.split(":", 4);
-        if (parts.length < 4) {
-            System.err.println("handleSendTransaction: destination must be host:port:privKeyFile:receiverPubKeyFile");
+        // New format: host:port:privKeyFile:pubKeyFile:receiverPubKeyFile
+        String[] parts = destination.split(":", 5);
+        if (parts.length < 5) {
+            System.err.println("handleSendTransaction: destination must be host:port:privKeyFile:pubKeyFile:receiverPubKeyFile");
             return false;
         }
         String host = parts[0];
@@ -59,7 +59,8 @@ public class ServerOperations {
             return false;
         }
         String privKeyFile = parts[2];
-        String receiverPubKeyFile = parts[3];
+        String pubKeyFile = parts[3];
+        String receiverPubKeyFile = parts[4];
 
         // Attempt to read dataFile and, if JSON with transaction fields, insert into DB
         long id = generatePositiveId();
@@ -107,7 +108,7 @@ public class ServerOperations {
         }
 
         // Build the Request and enqueue it
-        Request req = new Request(host, port, privKeyFile, receiverPubKeyFile, dataFile, 1);
+        Request req = new Request(host, port, privKeyFile, pubKeyFile, receiverPubKeyFile, dataFile, 1);
         enqueueRequest(req);
         return true;
     }

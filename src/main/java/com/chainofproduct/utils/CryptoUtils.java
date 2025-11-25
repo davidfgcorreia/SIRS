@@ -2,12 +2,10 @@ package com.chainofproduct.utils;
 
 
 import javax.crypto.Cipher;
-import java.security.MessageDigest;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-import javax.crypto.Mac;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.nio.ByteBuffer;
@@ -19,6 +17,22 @@ public class CryptoUtils {
     private static final int GCM_TAG_LENGTH = 128;
     private static final int IV_LENGTH = 12;
     private static final byte VERSION = 1; // Protocol version
+    private static final int NONCE_LENGTH = 12; // 96 bits, same as IV for convenience
+
+    // Replay protection: track used nonces and their expiration
+    private static final java.util.Map<String, Long> usedNonces = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.Timer nonceCleanupTimer = new java.util.Timer(true);
+
+    static {
+        // Schedule periodic cleanup of expired nonces
+        nonceCleanupTimer.schedule(new java.util.TimerTask() {
+            @Override
+            public void run() {
+                long now = System.currentTimeMillis();
+                usedNonces.entrySet().removeIf(e -> e.getValue() < now);
+            }
+        }, 60_000, 60_000); // every 1 minute
+    }
     
     // Reuse SecureRandom instance for better performance
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -60,33 +74,30 @@ public class CryptoUtils {
     public static String encrypt(byte[] data, SecretKey key, byte[] aad) throws Exception {
         byte[] iv = generateIV();
         long timestamp = Instant.now().toEpochMilli();
+        byte[] nonce = generateNonce();
 
-        // Prepare plaintext: [timestamp (8 bytes)] + data
-        ByteBuffer plainBuf = ByteBuffer.allocate(8 + data.length);
+        // Prepare plaintext: [timestamp (8 bytes)] [nonce (12 bytes)] + data
+        ByteBuffer plainBuf = ByteBuffer.allocate(8 + NONCE_LENGTH + data.length);
         plainBuf.putLong(timestamp);
+        plainBuf.put(nonce);
         plainBuf.put(data);
-        byte[] plainWithTimestamp = plainBuf.array();
+        byte[] plainWithTimestampAndNonce = plainBuf.array();
 
         // Encrypt with AES-GCM (provides both confidentiality and authenticity)
         Cipher cipher = Cipher.getInstance(AES_GCM);
         GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
         cipher.init(Cipher.ENCRYPT_MODE, key, spec);
-        
-        // Add AAD if provided (authenticated but not encrypted)
         if (aad != null && aad.length > 0) {
             cipher.updateAAD(aad);
         }
-        
         byte[] ciphertext;
         try {
-            ciphertext = cipher.doFinal(plainWithTimestamp);
+            ciphertext = cipher.doFinal(plainWithTimestampAndNonce);
         } catch (Exception e) {
-            // Zero sensitive data before throwing
-            zeroArray(plainWithTimestamp);
+            zeroArray(plainWithTimestampAndNonce);
             throw new SecurityException("Operation failed", e);
         } finally {
-            // Zero plaintext from memory
-            zeroArray(plainWithTimestamp);
+            zeroArray(plainWithTimestampAndNonce);
         }
 
         // Final structure: [version][IV][ciphertext with GCM tag]
@@ -125,10 +136,12 @@ public class CryptoUtils {
     public static byte[] decrypt(String input, SecretKey key, long maxAgeMillis, byte[] aad) throws Exception {
         byte[] all = Base64.getDecoder().decode(input);
         VerificationResult result = verifySafety(all, key, maxAgeMillis, aad);
-        // Now just extract the data (timestamp already checked)
+        // Now just extract the data (timestamp and nonce already checked)
         ByteBuffer plainBuf = ByteBuffer.wrap(result.plainWithTimestamp);
         plainBuf.getLong(); // skip timestamp
-        byte[] data = new byte[result.plainWithTimestamp.length - 8];
+        byte[] nonce = new byte[NONCE_LENGTH];
+        plainBuf.get(nonce); // skip nonce
+        byte[] data = new byte[result.plainWithTimestamp.length - 8 - NONCE_LENGTH];
         plainBuf.get(data);
         return data;
     }
@@ -147,16 +160,13 @@ public class CryptoUtils {
         if (all.length < 1 + IV_LENGTH + 16) { // version + IV + min GCM tag
             throw new SecurityException("Verification failed: invalid input");
         }
-        
         // Extract version, IV, and ciphertext
         byte version = all[0];
         if (version != VERSION) {
             throw new SecurityException("Verification failed: invalid format");
         }
-        
         byte[] iv = new byte[IV_LENGTH];
         System.arraycopy(all, 1, iv, 0, IV_LENGTH);
-        
         byte[] ciphertext = new byte[all.length - 1 - IV_LENGTH];
         System.arraycopy(all, 1 + IV_LENGTH, ciphertext, 0, ciphertext.length);
 
@@ -164,45 +174,52 @@ public class CryptoUtils {
         Cipher cipher = Cipher.getInstance(AES_GCM);
         GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
         cipher.init(Cipher.DECRYPT_MODE, aesKey, spec);
-        
-        // Add AAD if provided
         if (aad != null && aad.length > 0) {
             cipher.updateAAD(aad);
         }
-        
-        byte[] plainWithTimestamp;
+        byte[] plainWithTimestampAndNonce;
         try {
-            plainWithTimestamp = cipher.doFinal(ciphertext);
+            plainWithTimestampAndNonce = cipher.doFinal(ciphertext);
         } catch (javax.crypto.AEADBadTagException e) {
-            // Generic error to avoid leaking information about failure type
             throw new SecurityException("Verification failed", e);
         } catch (Exception e) {
             throw new SecurityException("Verification failed", e);
         }
-        
-        // Check timestamp validity and freshness
-        if (plainWithTimestamp.length < 8) {
-            zeroArray(plainWithTimestamp);
+        // Check timestamp and nonce validity and freshness
+        if (plainWithTimestampAndNonce.length < 8 + NONCE_LENGTH) {
+            zeroArray(plainWithTimestampAndNonce);
             throw new SecurityException("Verification failed");
         }
-        
-        ByteBuffer plainBuf = ByteBuffer.wrap(plainWithTimestamp);
+        ByteBuffer plainBuf = ByteBuffer.wrap(plainWithTimestampAndNonce);
         long timestamp = plainBuf.getLong();
+        byte[] nonce = new byte[NONCE_LENGTH];
+        plainBuf.get(nonce);
         long now = Instant.now().toEpochMilli();
-        
-        // Protect against negative timestamps and future timestamps (with clock drift tolerance)
         if (timestamp < 0 || timestamp > now + CLOCK_DRIFT_TOLERANCE) {
-            zeroArray(plainWithTimestamp);
+            zeroArray(plainWithTimestampAndNonce);
             throw new SecurityException("Verification failed");
         }
-        
-        // Check if message is too old
         if (now - timestamp > maxAgeMillis) {
-            zeroArray(plainWithTimestamp);
+            zeroArray(plainWithTimestampAndNonce);
             throw new SecurityException("Verification failed");
         }
+        // Replay protection: check and store nonce
+        String nonceKey = Base64.getEncoder().encodeToString(nonce);
+        Long expires = usedNonces.putIfAbsent(nonceKey, now + maxAgeMillis + CLOCK_DRIFT_TOLERANCE);
+        if (expires != null) {
+            zeroArray(plainWithTimestampAndNonce);
+            throw new SecurityException("Verification failed: replay detected");
+        }
+        return new VerificationResult(iv, ciphertext, plainWithTimestampAndNonce);
+    }
 
-        return new VerificationResult(iv, ciphertext, plainWithTimestamp);
+    /**
+     * Generates a cryptographically secure random nonce for replay protection.
+     */
+    public static byte[] generateNonce() {
+        byte[] nonce = new byte[NONCE_LENGTH];
+        SECURE_RANDOM.nextBytes(nonce);
+        return nonce;
     }
 
     // Helper class for verification result
@@ -244,25 +261,7 @@ public class CryptoUtils {
         return new SecretKeySpec(keyBytes, AES);
     }
 
-    /**
-     * Generates an HMAC key using KeyGenerator (standard method).
-     * Note: AES-GCM alone is sufficient for most use cases.
-     */
-    public static SecretKey generateHMACKey() throws Exception {
-        KeyGenerator keyGen = KeyGenerator.getInstance("HmacSHA256");
-        keyGen.init(256);
-        return keyGen.generateKey();
-    }
-    
-    /**
-     * Alternative HMAC key generation using SecureRandom.
-     * Use this if KeyGenerator.getInstance("HmacSHA256") is not available.
-     */
-    public static SecretKey generateHMACKeyAlt() {
-        byte[] key = new byte[32];
-        SECURE_RANDOM.nextBytes(key);
-        return new SecretKeySpec(key, "HmacSHA256");
-    }
+
 
     // ---- Command-line interface ----
     public static void main(String[] args) {
@@ -312,13 +311,6 @@ public class CryptoUtils {
                         }
                         cliGenerateAESKey(inputArgs[1]);
                         break;
-                    case "generatehmackey":
-                        if (inputArgs.length < 2) {
-                            System.err.println("Usage: Crypto-utilities generateHMACKey <output-file>");
-                            break;
-                        }
-                        cliGenerateHMACKey(inputArgs[1]);
-                        break;
                     default:
                         System.err.println("Unknown command: " + cmd);
                         printCliHelp();
@@ -337,9 +329,6 @@ public class CryptoUtils {
         System.out.println("    Display all commands and descriptions.");
         System.out.println("  Crypto-utilities generateAESKey <output-file>");
         System.out.println("    Generates a random AES key (256 bits) and saves it to the specified file in the 'keys' folder (base64-encoded).");
-        System.out.println("  Crypto-utilities generateHMACKey <output-file>");
-        System.out.println("    Generates a random HMAC key (256 bits) for legacy compatibility (base64-encoded).");
-        System.out.println("    Note: AES-GCM provides authentication, so separate HMAC is usually not needed.");
         System.out.println("  Crypto-utilities protect <input-file> <aes-key-file> <output-file>");
         System.out.println("    Encrypts and protects the input file using AES-GCM (provides confidentiality and authenticity).");
         System.out.println("  Crypto-utilities check <input-file> <aes-key-file>");
@@ -384,13 +373,6 @@ public class CryptoUtils {
         System.out.println("AES key generated and saved to keys/" + outputFile);
     }
 
-    private static void cliGenerateHMACKey(String outputFile) throws Exception {
-        SecretKey key = generateHMACKey();
-        String b64 = Base64.getEncoder().encodeToString(key.getEncoded());
-        java.nio.file.Files.createDirectories(java.nio.file.Paths.get("keys"));
-        java.nio.file.Files.writeString(java.nio.file.Paths.get("keys/" + outputFile), b64);
-        System.out.println("HMAC key generated and saved to keys/" + outputFile);
-    }
 
     public static SecretKey readKeyFromFile(String file, String algorithm) throws Exception {
         String b64 = java.nio.file.Files.readString(java.nio.file.Paths.get(file));

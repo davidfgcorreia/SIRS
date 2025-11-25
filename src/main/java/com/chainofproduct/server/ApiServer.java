@@ -15,16 +15,18 @@ import java.security.spec.X509EncodedKeySpec;;
 public class ApiServer {
 
     // Sender logic: initiates handshake, receives session keys, sends encrypted data
-    public static void actAsSender(String host, int port, String privKeyFile, String receiverPubKeyFile, String dataFile) throws Exception {
-        // Load keys
-        PrivateKey senderPrivateKey = loadPrivateKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(privKeyFile)));
+    public static void actAsSender(String host, int port, String senderPrivKeyFile, String senderPubKeyFile, String receiverPubKeyFile, String dataFile) throws Exception {
+        // Load sender's private and public key
+        PrivateKey senderPrivateKey = loadPrivateKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(senderPrivKeyFile)));
+        PublicKey senderPublicKey = loadPublicKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(senderPubKeyFile)));
+        // Load receiver's public key
         PublicKey receiverPublicKey = loadPublicKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(receiverPubKeyFile)));
         // Connect
         SSLSocketFactory sf = (SSLSocketFactory) SSLSocketFactory.getDefault();
         try (SSLSocket socket = (SSLSocket) sf.createSocket(host, port)) {
             DataOutputStream out = new DataOutputStream(socket.getOutputStream());
             DataInputStream in = new DataInputStream(socket.getInputStream());
-            // --- 1. Handshake: send nonce, timestamp, signature, public key ---
+            // --- 1. Handshake: send nonce, timestamp, signature, sender's public key ---
             byte[] nonce = new byte[8];
             new java.security.SecureRandom().nextBytes(nonce);
             long timestamp = System.currentTimeMillis();
@@ -36,7 +38,7 @@ public class ApiServer {
             out.writeLong(timestamp);
             out.writeInt(signature.length);
             out.write(signature);
-            byte[] senderPubBytes = senderPrivateKey.getPublic().getEncoded(); // For demo, use receiver's pubkey as sender's pubkey
+            byte[] senderPubBytes = senderPublicKey.getEncoded();
             out.writeInt(senderPubBytes.length);
             out.write(senderPubBytes);
             out.flush();
