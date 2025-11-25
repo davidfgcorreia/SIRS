@@ -1,5 +1,6 @@
 package com.chainofproduct.server;
 
+import com.chainofproduct.db.DatabaseOperations;
 import com.chainofproduct.utils.CryptoUtils;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
@@ -8,6 +9,13 @@ import java.util.concurrent.LinkedBlockingQueue;
 
 public class Main {
     public static void main(String[] args) throws Exception {
+        // SET SERVER IDENTITY - Configure which company this server represents
+        // This MUST match one of the companies in destination_ips table
+        // Options: "Lays Chips", "Stealing Corporation", "Ching Chong Extractions"
+        String serverIdentity = System.getProperty("server.name", "Lays Chips");
+        DatabaseOperations.setServerName(serverIdentity);
+        System.out.println("Server identity set to: " + serverIdentity);
+        
         // Initialize CryptoUtils to ensure replay-protection timer and nonce map are started
         try {
             CryptoUtils.generateNonce();

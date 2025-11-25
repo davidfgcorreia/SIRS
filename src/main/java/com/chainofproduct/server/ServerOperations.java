@@ -29,13 +29,20 @@ public class ServerOperations {
     }
 
     /**
-     * Resolve the destination, create a DB transaction record (if possible),
-     * enqueue a Request for the sender manager, and notify the manager.
-     *
-     * Destination format expected (simple): host:port:privKeyFile:receiverPubKeyFile
-     *
-     * Returns true if the request was accepted and queued (or DB insert succeeded),
-     * false otherwise.
+     * Handle send transaction with proper validation and share checking.
+     * 
+     * Flow:
+     * 1. Parse and validate JSON transaction data
+     * 2. Confirm server is buyer or seller
+     * 3. Resolve destination info from database
+     * 4. Store transaction in the database
+     * 5. Check for required shares
+     * 6. If shares missing, forward to other party for share generation
+     * 7. Enqueue request for sending
+     * 
+     * Destination can be either:
+     * - Company name (resolved from DB)
+     * - Full format: host:port:privKeyFile:pubKeyFile:receiverPubKeyFile
      */
     public boolean handleSendTransaction(String dataFile, String destination) {
         if (destination == null || destination.isEmpty()) {
@@ -43,70 +50,149 @@ public class ServerOperations {
             return false;
         }
 
-        // Try to parse destination
-        // New format: host:port:privKeyFile:pubKeyFile:receiverPubKeyFile
-        String[] parts = destination.split(":", 5);
-        if (parts.length < 5) {
-            System.err.println("handleSendTransaction: destination must be host:port:privKeyFile:pubKeyFile:receiverPubKeyFile");
-            return false;
-        }
-        String host = parts[0];
-        int port;
-        try {
-            port = Integer.parseInt(parts[1]);
-        } catch (NumberFormatException e) {
-            System.err.println("handleSendTransaction: invalid port: " + parts[1]);
-            return false;
-        }
-        String privKeyFile = parts[2];
-        String pubKeyFile = parts[3];
-        String receiverPubKeyFile = parts[4];
-
-        // Attempt to read dataFile and, if JSON with transaction fields, insert into DB
+        String serverName = DatabaseOperations.getServerName();
+        
+        // Read and parse transaction JSON
         long id = generatePositiveId();
+        JsonNode root = null;
+        String seller = null;
+        String buyer = null;
+        
         try {
             byte[] raw = Files.readAllBytes(Paths.get(dataFile));
             String content = new String(raw);
-
-            // Try parse JSON as a transaction record
-            JsonNode root = tryParseJson(content);
-            if (root != null && root.has("seller") && root.has("buyer") && root.has("product")) {
-                // Extract fields (use defaults if missing)
-                long parsedId = root.has("id") ? root.get("id").asLong() : id;
-                long timestamp = root.has("timestamp") ? root.get("timestamp").asLong() : System.currentTimeMillis();
-                String seller = root.has("seller") ? root.get("seller").asText() : "unknown";
-                String buyer = root.has("buyer") ? root.get("buyer").asText() : destination;
-                String product = root.has("product") ? root.get("product").asText() : dataFile;
-                long units = root.has("units") ? root.get("units").asLong() : 0L;
-                long amount = root.has("amount") ? root.get("amount").asLong() : 0L;
-
-                // Insert into DB (ON CONFLICT DO NOTHING in your SQL will protect duplicates)
-                try {
-                    DatabaseOperations.insertTransaction(parsedId, timestamp, seller, buyer, product, units, amount);
-                    id = parsedId; // use parsed id if present
-                    System.out.println("Inserted transaction id=" + parsedId + " into DB before sending.");
-                } catch (SQLException sqe) {
-                    System.err.println("DB insert failed (continuing): " + sqe.getMessage());
-                }
-
-            } else {
-                // Not JSON or missing expected fields: create a placeholder DB record
-                long timestamp = System.currentTimeMillis();
-                String seller = "unknown";
-                String buyer = destination;
-                String product = dataFile; // store filename as product if we don't have details
-                try {
-                    DatabaseOperations.insertTransaction(id, timestamp, seller, buyer, product, 0L, 0L);
-                    System.out.println("Inserted placeholder transaction id=" + id + " into DB before sending.");
-                } catch (SQLException sqe) {
-                    System.err.println("DB insert failed for placeholder (continuing): " + sqe.getMessage());
-                }
+            root = tryParseJson(content);
+            
+            if (root == null || !root.has("seller") || !root.has("buyer") || !root.has("product")) {
+                System.err.println("handleSendTransaction: Invalid JSON - missing required fields (seller, buyer, product)");
+                return false;
             }
+            
+            // Extract transaction fields
+            id = root.has("id") ? root.get("id").asLong() : generatePositiveId();
+            long timestamp = root.has("timestamp") ? root.get("timestamp").asLong() : System.currentTimeMillis();
+            seller = root.get("seller").asText();
+            buyer = root.get("buyer").asText();
+            String product = root.get("product").asText();
+            long units = root.has("units") ? root.get("units").asLong() : 0L;
+            long amount = root.has("amount") ? root.get("amount").asLong() : 0L;
+            
+            // VALIDATION: Confirm server is buyer or seller
+            if (!serverName.equals(seller) && !serverName.equals(buyer)) {
+                System.err.println("handleSendTransaction: Invalid Transaction - server '" + serverName + 
+                    "' is neither seller '" + seller + "' nor buyer '" + buyer + "'");
+                return false;
+            }
+            
+            System.out.println("Transaction validated: server is " + 
+                (serverName.equals(seller) ? "seller" : "buyer"));
+            
+            // Store transaction in database
+            try {
+                DatabaseOperations.insertTransaction(id, timestamp, seller, buyer, product, units, amount);
+                System.out.println("Stored transaction id=" + id + " in database");
+            } catch (SQLException sqe) {
+                System.err.println("Failed to store transaction: " + sqe.getMessage());
+                return false;
+            }
+            
+            // Check for required shares (example: need at least 1 share from each party)
+            boolean sellerHasShares = DatabaseOperations.checkShares(id, "seller", 1);
+            boolean buyerHasShares = DatabaseOperations.checkShares(id, "buyer", 1);
+            
+            if (!sellerHasShares || !buyerHasShares) {
+                System.out.println("Shares missing for transaction " + id + 
+                    " (seller:" + sellerHasShares + ", buyer:" + buyerHasShares + ")");
+                
+                // Determine which party to forward to for share generation
+                String otherParty = serverName.equals(seller) ? buyer : seller;
+                System.out.println("Forwarding transaction to " + otherParty + " for share generation");
+                
+                // Resolve destination info from database
+                DatabaseOperations.DestinationInfo destInfo = DatabaseOperations.getDestinationInfo(otherParty);
+                if (destInfo == null) {
+                    System.err.println("Cannot resolve destination info for: " + otherParty);
+                    return false;
+                }
+                
+                // Record share propagation
+                DatabaseOperations.storeSharePropagation(id, otherParty, serverName);
+                
+                // Build request with resolved info (need to determine key files)
+                // For now, using placeholder key files - should be configured
+                String privKeyFile = "keys/" + serverName.toLowerCase().replace(" ", "-") + "-private.key";
+                String pubKeyFile = "keys/" + serverName.toLowerCase().replace(" ", "-") + "-public.key";
+                
+                Request req = new Request(
+                    destInfo.ip, 
+                    destInfo.port, 
+                    privKeyFile, 
+                    pubKeyFile, 
+                    destInfo.publicKey,
+                    dataFile, 
+                    2 // Type 2 = share request
+                );
+                enqueueRequest(req);
+                System.out.println("Enqueued share request to " + otherParty);
+            }
+            
         } catch (IOException ioe) {
-            System.err.println("handleSendTransaction: failed to read dataFile '" + dataFile + "': " + ioe.getMessage());
-            // We continue and still enqueue the request so sender can attempt sending raw file. Return false would be valid too.
+            System.err.println("handleSendTransaction: failed to read dataFile: " + ioe.getMessage());
+            return false;
+        } catch (SQLException sqe) {
+            System.err.println("handleSendTransaction: database error: " + sqe.getMessage());
+            return false;
         }
-
+        
+        // Resolve destination for actual transaction sending
+        String host;
+        int port;
+        String privKeyFile;
+        String pubKeyFile;
+        String receiverPubKeyFile;
+        
+        // Check if destination is a company name or full format
+        if (destination.contains(":")) {
+            // Full format: host:port:privKeyFile:pubKeyFile:receiverPubKeyFile
+            String[] parts = destination.split(":", 5);
+            if (parts.length < 5) {
+                System.err.println("handleSendTransaction: destination must be host:port:privKeyFile:pubKeyFile:receiverPubKeyFile");
+                return false;
+            }
+            host = parts[0];
+            try {
+                port = Integer.parseInt(parts[1]);
+            } catch (NumberFormatException e) {
+                System.err.println("handleSendTransaction: invalid port: " + parts[1]);
+                return false;
+            }
+            privKeyFile = parts[2];
+            pubKeyFile = parts[3];
+            receiverPubKeyFile = parts[4];
+        } else {
+            // Company name - resolve from database
+            try {
+                DatabaseOperations.DestinationInfo destInfo = DatabaseOperations.getDestinationInfo(destination);
+                if (destInfo == null) {
+                    System.err.println("handleSendTransaction: destination company not found: " + destination);
+                    return false;
+                }
+                host = destInfo.ip;
+                port = destInfo.port;
+                receiverPubKeyFile = destInfo.publicKey;
+                
+                // Use server's own keys
+                String srvName = DatabaseOperations.getServerName();
+                privKeyFile = "keys/" + srvName.toLowerCase().replace(" ", "-") + "-private.key";
+                pubKeyFile = "keys/" + srvName.toLowerCase().replace(" ", "-") + "-public.key";
+                
+                System.out.println("Resolved destination: " + destination + " -> " + host + ":" + port);
+            } catch (SQLException sqe) {
+                System.err.println("handleSendTransaction: failed to resolve destination: " + sqe.getMessage());
+                return false;
+            }
+        }
+        
         // Build the Request and enqueue it
         Request req = new Request(host, port, privKeyFile, pubKeyFile, receiverPubKeyFile, dataFile, 1);
         enqueueRequest(req);

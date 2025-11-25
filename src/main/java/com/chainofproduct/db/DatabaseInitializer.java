@@ -26,15 +26,35 @@ public class DatabaseInitializer {
                 ")"
             );
             // Create transaction_shares table
-                stmt.executeUpdate(
-                    "CREATE TABLE IF NOT EXISTS transaction_shares (" +
-                    "id BIGINT NOT NULL," +
-                    "share VARCHAR(255) NOT NULL," +
-                    "shared_by VARCHAR(16) NOT NULL," + // 'seller' or 'buyer'
-                    "PRIMARY KEY (id, share)," +
-                    "FOREIGN KEY (id) REFERENCES transaction(id) ON DELETE CASCADE" +
-                    ")"
-                );
+            stmt.executeUpdate(
+                "CREATE TABLE IF NOT EXISTS transaction_shares (" +
+                "id BIGINT NOT NULL," +
+                "share VARCHAR(255) NOT NULL," +
+                "shared_by VARCHAR(16) NOT NULL," + // 'seller' or 'buyer'
+                "PRIMARY KEY (id, share)," +
+                "FOREIGN KEY (id) REFERENCES transaction(id) ON DELETE CASCADE" +
+                ")"
+            );
+            // Create destination_ips table
+            stmt.executeUpdate(
+                "CREATE TABLE IF NOT EXISTS destination_ips (" +
+                "company VARCHAR(255) PRIMARY KEY," +
+                "ip VARCHAR(32) NOT NULL," +
+                "port INTEGER NOT NULL," +
+                "public_key TEXT NOT NULL" +
+                ")"
+            );
+            // Create share_propagation table to track share forwarding
+            stmt.executeUpdate(
+                "CREATE TABLE IF NOT EXISTS share_propagation (" +
+                "id SERIAL PRIMARY KEY," +
+                "transaction_id BIGINT NOT NULL," +
+                "destination VARCHAR(255) NOT NULL," +
+                "origin VARCHAR(255) NOT NULL," +
+                "timestamp BIGINT NOT NULL," +
+                "FOREIGN KEY (transaction_id) REFERENCES transaction(id) ON DELETE CASCADE" +
+                ")"
+            );
             System.out.println("Database and tables initialized successfully.");
         }
     }
