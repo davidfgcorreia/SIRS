@@ -46,34 +46,6 @@ public class DatabaseOperations {
     }
   }
 
-  public static void addDestinationIp(String company, String ip, String port, String public_key) throws SQLException {
-    String sql = "INSERT INTO transaction_ips (company, ip, port, public_key) VALUES (?, ?, ?) ON CONFLICT DO NOTHING";
-    try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
-        PreparedStatement pstmt = conn.prepareStatement(sql)) {
-      pstmt.setString(1, company);
-      pstmt.setString(2, ip);
-      pstmt.setString(3, port);
-      pstmt.setString(4, public_key);
-      pstmt.executeUpdate();
-    }
-  }
-
-  public static String getDestinationIpByCompany(String company) throws SQLException {
-    String sql = "SELECT ip FROM transaction_ips WHERE company = ?";
-    String ip;
-    try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
-        PreparedStatement pstmt = conn.prepareStatement(sql)) {
-      pstmt.setString(1, company);
-      ResultSet rs = pstmt.executeQuery();
-      if (rs.next()) {
-        ip = rs.getString("ip");
-      } else {
-        ip = null;
-      }
-    }
-    return ip;
-  }
-
   public static List<String> getShares(long transactionId) throws SQLException {
     String sql = "SELECT share FROM transaction_shares WHERE id = ?";
     List<String> shares = new ArrayList<>();

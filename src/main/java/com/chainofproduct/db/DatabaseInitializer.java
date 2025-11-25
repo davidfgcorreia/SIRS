@@ -4,9 +4,6 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 
 public class DatabaseInitializer {
   private static final String DB_URL = "jdbc:postgresql://localhost:5432/server-name";
@@ -65,7 +62,7 @@ public class DatabaseInitializer {
   public static void main(String[] args) {
     try {
       initializeDatabase();
-    } catch (SQLException | IOException e) {
+    } catch (SQLException e) {
       System.err.println("Database initialization failed: " + e.getMessage());
       e.printStackTrace();
     }
