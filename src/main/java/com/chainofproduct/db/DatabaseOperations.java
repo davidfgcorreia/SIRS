@@ -143,41 +143,6 @@ public class DatabaseOperations {
         return null;
     }
     
-    /**
-     * Check if a party (buyer/seller) has sufficient shares for a transaction.
-     * Returns true if the party has at least 'requiredAmount' shares.
-     */
-    public static boolean checkShares(long transactionId, String party, int requiredAmount) throws SQLException {
-        String sql = "SELECT COUNT(*) FROM transaction_shares WHERE id = ? AND shared_by = ?";
-        try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, transactionId);
-            pstmt.setString(2, party);
-            try (ResultSet rs = pstmt.executeQuery()) {
-                if (rs.next()) {
-                    int count = rs.getInt(1);
-                    return count >= requiredAmount;
-                }
-            }
-        }
-        return false;
-    }
-    
-    /**
-     * Store share propagation information.
-     * Logs when shares are forwarded to another destination.
-     */
-    public static void storeSharePropagation(long transactionId, String destination, String origin) throws SQLException {
-        String sql = "INSERT INTO share_propagation (transaction_id, destination, origin, timestamp) VALUES (?, ?, ?, ?)";
-        try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setLong(1, transactionId);
-            pstmt.setString(2, destination);
-            pstmt.setString(3, origin);
-            pstmt.setLong(4, System.currentTimeMillis());
-            pstmt.executeUpdate();
-        }
-    }
     
     /**
      * Add a company to the destination_ips table.

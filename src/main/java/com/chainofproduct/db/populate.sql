@@ -26,20 +26,10 @@ CREATE TABLE IF NOT EXISTS destination_ips (
     public_key TEXT NOT NULL
 );
 
--- create table share_propagation
-CREATE TABLE IF NOT EXISTS share_propagation (
-    id SERIAL PRIMARY KEY,
-    transaction_id BIGINT NOT NULL,
-    destination VARCHAR(255) NOT NULL,
-    origin VARCHAR(255) NOT NULL,
-    timestamp BIGINT NOT NULL,
-    FOREIGN KEY (transaction_id) REFERENCES transaction(id) ON DELETE CASCADE
-);
-
 -- Populate tables  TODO: change ip, port, public_key
 INSERT INTO destination_ips (company, ip, port, public_key)
 VALUES 
-    ('Lays Chips',              '127.0.0.1', 8443, 'keys/lays-chips-public.key'),
+    ('Lays Chips',              '127.0.0.1', 8443, 'keys/lays-chips-public.key'), -- Devia ser a chave em si e nao a localizacao do ficheiro 
     ('Stealing Corporation',    '127.0.0.1', 8444, 'keys/stealing-corporation-public.key'),
     ('Ching Chong Extractions', '127.0.0.1', 8445, 'keys/ching-chong-extractions-public.key')
 ON CONFLICT (company) DO NOTHING;
