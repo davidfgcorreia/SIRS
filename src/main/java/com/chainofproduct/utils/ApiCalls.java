@@ -12,7 +12,7 @@ import java.security.spec.X509EncodedKeySpec;;
 public class ApiCalls {
 
     // Sender logic: initiates handshake, receives session keys, sends encrypted data with HMAC
-    public static byte[] actAsSender(String host, int port, String senderPrivKeyFile, String senderPubKeyFile, String receiverPubKeyFile, String dataFile, String senderId) throws Exception {
+    public static byte[] actAsSender(String host, int port, String senderPrivKeyFile, String senderPubKeyFile, String receiverPubKeyFile, byte[] dataFile) throws Exception {
         // Load sender's private and public key
         PrivateKey senderPrivateKey = loadPrivateKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(senderPrivKeyFile)));
         PublicKey senderPublicKey = loadPublicKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(senderPubKeyFile)));
@@ -54,8 +54,7 @@ public class ApiCalls {
             System.arraycopy(sessionKeys, 0, aesKeyBytes, 0, 32);
             SecretKey aesKey = new javax.crypto.spec.SecretKeySpec(aesKeyBytes, "AES");
             // --- 4. Encrypt and send data ---
-            byte[] data = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(dataFile));
-            byte[] encryptedData = CryptoUtils.encrypt(data, aesKey);
+            byte[] encryptedData = CryptoUtils.encrypt(dataFile, aesKey);
             out.writeInt(encryptedData.length);
             out.write(encryptedData);
             out.flush();
