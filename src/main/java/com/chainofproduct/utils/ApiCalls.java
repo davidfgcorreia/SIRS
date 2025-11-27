@@ -11,13 +11,16 @@ import java.security.spec.X509EncodedKeySpec;;
 
 public class ApiCalls {
 
-    // Sender logic: initiates handshake, receives session keys, sends encrypted data
-    public static void actAsSender(String host, int port, String senderPrivKeyFile, String senderPubKeyFile, String receiverPubKeyFile, String dataFile) throws Exception {
+    // Sender logic: initiates handshake, receives session keys, sends encrypted data with HMAC
+    public static void actAsSender(String host, int port, String senderPrivKeyFile, String senderPubKeyFile, String receiverPubKeyFile, String dataFile, String senderId) throws Exception {
         // Load sender's private and public key
         PrivateKey senderPrivateKey = loadPrivateKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(senderPrivKeyFile)));
         PublicKey senderPublicKey = loadPublicKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(senderPubKeyFile)));
         // Load receiver's public key
         PublicKey receiverPublicKey = loadPublicKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(receiverPubKeyFile)));
+        // Load sender's HMAC key
+        SecretKey senderHmacKey = CryptoUtils.loadHMACKey(senderId);
+        
         // Connect
         SSLSocketFactory sf = (SSLSocketFactory) SSLSocketFactory.getDefault();
         try (SSLSocket socket = (SSLSocket) sf.createSocket(host, port)) {
@@ -53,9 +56,9 @@ public class ApiCalls {
             byte[] aesKeyBytes = new byte[32];
             System.arraycopy(sessionKeys, 0, aesKeyBytes, 0, 32);
             SecretKey aesKey = new javax.crypto.spec.SecretKeySpec(aesKeyBytes, "AES");
-            // --- 4. Encrypt and send data ---
+            // --- 4. Encrypt and send data with HMAC ---
             byte[] data = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(dataFile));
-            String encryptedData = CryptoUtils.encrypt(data, aesKey);
+            String encryptedData = CryptoUtils.encryptWithHMAC(data, aesKey, senderHmacKey, senderId);
             byte[] encBytes = encryptedData.getBytes();
             out.writeInt(encBytes.length);
             out.write(encBytes);
@@ -74,10 +77,11 @@ public class ApiCalls {
         return sig.sign();
     }
 
-    // New handleClient: expects encrypted byte[] data, port, ip, sender's private key, receiver's public key
-    public static byte[] handleClient(SSLSocket socket) throws Exception {
+    // New handleClient: expects encrypted byte[] data with HMAC verification
+    public static DataWithSender handleClient(SSLSocket socket) throws Exception {
 
         byte[] decryptedPayload = null;
+        String senderId = null;
         
         try (DataInputStream in = new DataInputStream(socket.getInputStream());
              DataOutputStream out = new DataOutputStream(socket.getOutputStream())) {
@@ -113,22 +117,56 @@ public class ApiCalls {
             out.write(encryptedSessionKeys);
             out.flush();
 
-            // --- 3. Sender encrypts and sends data using session keys ---
+            // --- 3. Receive encrypted data with HMAC ---
             int payloadLen = in.readInt();
             byte[] encryptedPayload = new byte[payloadLen];
             in.readFully(encryptedPayload);
-            decryptedPayload = CryptoUtils.decrypt(new String(encryptedPayload), aesKey, 5 * 60 * 1000);
+            
+            // Decrypt with HMAC verification - try multiple user HMAC keys
+            CryptoUtils.DecryptedDataWithUser result = null;
+            String[] possibleUsers = {"Lays Chips", "Stealing Corporation", "Ching Chong Extractions"};
+            
+            for (String userId : possibleUsers) {
+                try {
+                    SecretKey hmacKey = CryptoUtils.loadHMACKey(userId);
+                    result = CryptoUtils.decryptWithHMAC(new String(encryptedPayload), aesKey, hmacKey, 5 * 60 * 1000);
+                    senderId = result.userId;
+                    decryptedPayload = result.data;
+                    System.out.println("Successfully decrypted data from: " + senderId);
+                    break;
+                } catch (Exception e) {
+                    // Try next user key
+                    continue;
+                }
+            }
+            
+            if (result == null) {
+                out.writeUTF("ERROR: HMAC verification failed for all known users");
+                out.flush();
+                return null;
+            }
 
-            //call server operations with decryptedPayload
-
-            System.out.println("Decrypted payload: " + new String(decryptedPayload));
+            System.out.println("Decrypted payload from " + senderId + ": " + new String(decryptedPayload));
             out.writeUTF("ACK");
             out.flush();
         } finally {
             // Cleanly close session
             try { socket.close(); } catch (Exception ignore) {}
         }
-        return decryptedPayload;
+        return new DataWithSender(decryptedPayload, senderId);
+    }
+    
+    /**
+     * Result class containing decrypted data and sender ID
+     */
+    public static class DataWithSender {
+        public final byte[] data;
+        public final String senderId;
+        
+        public DataWithSender(byte[] data, String senderId) {
+            this.data = data;
+            this.senderId = senderId;
+        }
     }
 
     // Helper: verify signature and freshness

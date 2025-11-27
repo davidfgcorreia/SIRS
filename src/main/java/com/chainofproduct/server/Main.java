@@ -45,7 +45,11 @@ public class Main {
                     final javax.net.ssl.SSLSocket socket = (javax.net.ssl.SSLSocket) serverSocket.accept();
                     receiverPool.submit(() -> {
                         try {
-                            ApiCalls.handleClient(socket);
+                            ApiCalls.DataWithSender result = ApiCalls.handleClient(socket);
+                            if (result != null) {
+                                System.out.println("Received data from: " + result.senderId);
+                                // TODO: Process result.data based on transaction type
+                            }
                         } catch (Exception e) {
                             e.printStackTrace();
                         }
@@ -87,14 +91,15 @@ public class Main {
                         Runnable sendTask = () -> {
                             try {
                                 if (req.getType() == 1 || req.getType() == 2) {
-                                    // Updated: pass senderPrivKeyFile, senderPubKeyFile, receiverPubKeyFile, dataFile
+                                    // Updated: pass senderPrivKeyFile, senderPubKeyFile, receiverPubKeyFile, dataFile, senderId
                                     ApiCalls.actAsSender(
                                         req.getHost(),
                                         req.getPort(),
                                         req.getPrivKeyFile(),
                                         req.getPubKeyFile(),
                                         req.getReceiverPubKeyFile(),
-                                        req.getDataFile()
+                                        req.getDataFile(),
+                                        serverIdentity  // Pass server identity as sender ID
                                     );
                                 }
                             } catch (Exception e) {
