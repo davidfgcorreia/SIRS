@@ -40,193 +40,11 @@ public class CryptoUtils {
     // Clock drift tolerance in milliseconds (for timestamp validation)
     private static final long CLOCK_DRIFT_TOLERANCE = 60 * 1000; // 1 minute
 
-    private static final String HMAC_ALGORITHM = "HmacSHA256";
     
     public static SecretKey generateAESKey(int keySize) throws Exception {
         KeyGenerator keyGen = KeyGenerator.getInstance(AES);
         keyGen.init(keySize);
         return keyGen.generateKey();
-    }
-    
-    /**
-     * Generate HMAC key for user authentication.
-     * Each user (buyer/seller) should have their own static HMAC key.
-     */
-    public static SecretKey generateHMACKey() throws Exception {
-        KeyGenerator keyGen = KeyGenerator.getInstance(HMAC_ALGORITHM);
-        keyGen.init(256); // 256-bit HMAC key
-        return keyGen.generateKey();
-    }
-
-
-    /**
-     * Encrypts data with HMAC authentication using user's symmetric key.
-     * This is used for transaction data where each party (buyer/seller) encrypts with their own key.
-     * Structure: [version][IV][ciphertext][HMAC]
-     * 
-     * @param data The data to encrypt
-     * @param aesKey AES encryption key
-     * @param hmacKey HMAC key for the user (buyer or seller)
-     * @param userId User identifier (e.g., "buyer" or "seller")
-     * @return base64-encoded encrypted data with HMAC
-     */
-    public static String encryptWithHMAC(byte[] data, SecretKey aesKey, SecretKey hmacKey, String userId) throws Exception {
-        byte[] iv = generateIV();
-        long timestamp = Instant.now().toEpochMilli();
-        byte[] nonce = generateNonce();
-
-        // Prepare plaintext: [timestamp][nonce][userId length][userId][data]
-        byte[] userIdBytes = userId.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        ByteBuffer plainBuf = ByteBuffer.allocate(8 + NONCE_LENGTH + 4 + userIdBytes.length + data.length);
-        plainBuf.putLong(timestamp);
-        plainBuf.put(nonce);
-        plainBuf.putInt(userIdBytes.length);
-        plainBuf.put(userIdBytes);
-        plainBuf.put(data);
-        byte[] plainWithMetadata = plainBuf.array();
-
-        // Encrypt with AES-GCM
-        Cipher cipher = Cipher.getInstance(AES_GCM);
-        GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
-        cipher.init(Cipher.ENCRYPT_MODE, aesKey, spec);
-        byte[] ciphertext;
-        try {
-            ciphertext = cipher.doFinal(plainWithMetadata);
-        } finally {
-            zeroArray(plainWithMetadata);
-        }
-
-        // Calculate HMAC over [version][IV][ciphertext]
-        ByteBuffer toHmac = ByteBuffer.allocate(1 + iv.length + ciphertext.length);
-        toHmac.put(VERSION);
-        toHmac.put(iv);
-        toHmac.put(ciphertext);
-        byte[] hmac = calculateHMAC(toHmac.array(), hmacKey);
-
-        // Final structure: [version][IV][ciphertext][HMAC]
-        ByteBuffer finalBuf = ByteBuffer.allocate(1 + iv.length + ciphertext.length + hmac.length);
-        finalBuf.put(VERSION);
-        finalBuf.put(iv);
-        finalBuf.put(ciphertext);
-        finalBuf.put(hmac);
-
-        return Base64.getEncoder().encodeToString(finalBuf.array());
-    }
-    
-    /**
-     * Decrypts data and verifies HMAC.
-     * 
-     * @param input base64-encoded encrypted data
-     * @param aesKey AES decryption key
-     * @param hmacKey HMAC key for verification
-     * @param maxAgeMillis Maximum age tolerance
-     * @return decrypted data with userId
-     */
-    public static DecryptedDataWithUser decryptWithHMAC(String input, SecretKey aesKey, SecretKey hmacKey, long maxAgeMillis) throws Exception {
-        byte[] all = Base64.getDecoder().decode(input);
-        
-        // HMAC is last 32 bytes (SHA256 output)
-        int hmacLength = 32;
-        if (all.length < 1 + IV_LENGTH + 16 + hmacLength) {
-            throw new SecurityException("Invalid encrypted data: too short");
-        }
-        
-        // Extract components
-        int hmacStart = all.length - hmacLength;
-        byte[] dataWithoutHmac = new byte[hmacStart];
-        byte[] receivedHmac = new byte[hmacLength];
-        System.arraycopy(all, 0, dataWithoutHmac, 0, hmacStart);
-        System.arraycopy(all, hmacStart, receivedHmac, 0, hmacLength);
-        
-        // Verify HMAC first
-        byte[] calculatedHmac = calculateHMAC(dataWithoutHmac, hmacKey);
-        if (!java.security.MessageDigest.isEqual(receivedHmac, calculatedHmac)) {
-            throw new SecurityException("HMAC verification failed - data may be tampered");
-        }
-        
-        // Extract version, IV, and ciphertext
-        byte version = dataWithoutHmac[0];
-        if (version != VERSION) {
-            throw new SecurityException("Invalid version");
-        }
-        
-        byte[] iv = new byte[IV_LENGTH];
-        System.arraycopy(dataWithoutHmac, 1, iv, 0, IV_LENGTH);
-        
-        byte[] ciphertext = new byte[dataWithoutHmac.length - 1 - IV_LENGTH];
-        System.arraycopy(dataWithoutHmac, 1 + IV_LENGTH, ciphertext, 0, ciphertext.length);
-        
-        // Decrypt
-        Cipher cipher = Cipher.getInstance(AES_GCM);
-        GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
-        cipher.init(Cipher.DECRYPT_MODE, aesKey, spec);
-        byte[] plainWithMetadata;
-        try {
-            plainWithMetadata = cipher.doFinal(ciphertext);
-        } catch (javax.crypto.AEADBadTagException e) {
-            throw new SecurityException("Decryption failed - data corrupted", e);
-        }
-        
-        // Extract metadata and data
-        ByteBuffer plainBuf = ByteBuffer.wrap(plainWithMetadata);
-        long timestamp = plainBuf.getLong();
-        byte[] nonce = new byte[NONCE_LENGTH];
-        plainBuf.get(nonce);
-        
-        // Verify freshness
-        long now = Instant.now().toEpochMilli();
-        if (timestamp < 0 || timestamp > now + CLOCK_DRIFT_TOLERANCE) {
-            zeroArray(plainWithMetadata);
-            throw new SecurityException("Invalid timestamp");
-        }
-        if (now - timestamp > maxAgeMillis) {
-            zeroArray(plainWithMetadata);
-            throw new SecurityException("Data expired");
-        }
-        
-        // Replay protection
-        String nonceKey = Base64.getEncoder().encodeToString(nonce);
-        Long expires = usedNonces.putIfAbsent(nonceKey, now + maxAgeMillis + CLOCK_DRIFT_TOLERANCE);
-        if (expires != null) {
-            zeroArray(plainWithMetadata);
-            throw new SecurityException("Replay attack detected");
-        }
-        
-        // Extract userId
-        int userIdLen = plainBuf.getInt();
-        byte[] userIdBytes = new byte[userIdLen];
-        plainBuf.get(userIdBytes);
-        String userId = new String(userIdBytes, java.nio.charset.StandardCharsets.UTF_8);
-        
-        // Extract actual data
-        byte[] data = new byte[plainWithMetadata.length - 8 - NONCE_LENGTH - 4 - userIdLen];
-        plainBuf.get(data);
-        
-        return new DecryptedDataWithUser(data, userId, timestamp);
-    }
-    
-    /**
-     * Calculate HMAC-SHA256
-     */
-    private static byte[] calculateHMAC(byte[] data, SecretKey hmacKey) throws Exception {
-        javax.crypto.Mac mac = javax.crypto.Mac.getInstance(HMAC_ALGORITHM);
-        mac.init(hmacKey);
-        return mac.doFinal(data);
-    }
-    
-    /**
-     * Result class for decrypted data with user information
-     */
-    public static class DecryptedDataWithUser {
-        public final byte[] data;
-        public final String userId;
-        public final long timestamp;
-        
-        public DecryptedDataWithUser(byte[] data, String userId, long timestamp) {
-            this.data = data;
-            this.userId = userId;
-            this.timestamp = timestamp;
-        }
     }
 
     /**
@@ -240,7 +58,7 @@ public class CryptoUtils {
      * @param key The AES key
      * @return base64-encoded string of the structure
      */
-    public static String encrypt(byte[] data, SecretKey key) throws Exception {
+    public static byte[] encrypt(byte[] data, SecretKey key) throws Exception {
         return encrypt(data, key, null);
     }
     
@@ -253,7 +71,7 @@ public class CryptoUtils {
      * @param aad Optional associated authenticated data (can be null)
      * @return base64-encoded string of the structure
      */
-    public static String encrypt(byte[] data, SecretKey key, byte[] aad) throws Exception {
+    public static byte[] encrypt(byte[] data, SecretKey key, byte[] aad) throws Exception {
         byte[] iv = generateIV();
         long timestamp = Instant.now().toEpochMilli();
         byte[] nonce = generateNonce();
@@ -289,7 +107,7 @@ public class CryptoUtils {
         finalBuf.put(ciphertext);
         byte[] result = finalBuf.array();
 
-        return Base64.getEncoder().encodeToString(result);
+        return result;
     }
 
 
@@ -302,7 +120,7 @@ public class CryptoUtils {
      * @param maxAgeMillis Maximum allowed age for freshness (e.g., 5*60*1000 for 5 minutes)
      * @return decrypted data (byte[])
      */
-    public static byte[] decrypt(String input, SecretKey key, long maxAgeMillis) throws Exception {
+    public static byte[] decrypt(byte[] input, SecretKey key, long maxAgeMillis) throws Exception {
         return decrypt(input, key, maxAgeMillis, null);
     }
     
@@ -315,9 +133,8 @@ public class CryptoUtils {
      * @param aad Associated authenticated data (must match what was used in encrypt)
      * @return decrypted data (byte[])
      */
-    public static byte[] decrypt(String input, SecretKey key, long maxAgeMillis, byte[] aad) throws Exception {
-        byte[] all = Base64.getDecoder().decode(input);
-        VerificationResult result = verifySafety(all, key, maxAgeMillis, aad);
+    public static byte[] decrypt(byte[] input, SecretKey key, long maxAgeMillis, byte[] aad) throws Exception {
+        VerificationResult result = verifySafety(input, key, maxAgeMillis, aad);
         // Now just extract the data (timestamp and nonce already checked)
         ByteBuffer plainBuf = ByteBuffer.wrap(result.plainWithTimestamp);
         plainBuf.getLong(); // skip timestamp
@@ -493,21 +310,6 @@ public class CryptoUtils {
                         }
                         cliGenerateAESKey(inputArgs[1]);
                         break;
-                    case "generatehmackey":
-                        if (inputArgs.length < 2) {
-                            System.err.println("Usage: Crypto-utilities generateHMACKey <user-id>");
-                            break;
-                        }
-                        cliGenerateHMACKey(inputArgs[1]);
-                        break;
-                    case "inithmackeys":
-                        if (inputArgs.length < 2) {
-                            System.err.println("Usage: Crypto-utilities initHMACKeys <user1> <user2> ...");
-                            break;
-                        }
-                        String[] users = java.util.Arrays.copyOfRange(inputArgs, 1, inputArgs.length);
-                        initializeHMACKeys(users);
-                        break;
                     default:
                         System.err.println("Unknown command: " + cmd);
                         printCliHelp();
@@ -545,8 +347,8 @@ public class CryptoUtils {
     private static void cliProtect(String inputFile, String aesKeyPath, String outputFile) throws Exception {
         SecretKey aesKey = readKeyFromFile(aesKeyPath, AES);
         byte[] data = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(inputFile));
-        String encrypted = encrypt(data, aesKey);
-        java.nio.file.Files.writeString(java.nio.file.Paths.get(outputFile), encrypted);
+        byte[] encrypted = encrypt(data, aesKey);
+        java.nio.file.Files.write(java.nio.file.Paths.get(outputFile), encrypted);
         System.out.println("File protected and written to " + outputFile);
     }
 
@@ -560,7 +362,7 @@ public class CryptoUtils {
 
     private static void cliUnprotect(String inputFile, String aesKeyPath, String outputFile) throws Exception {
         SecretKey aesKey = readKeyFromFile(aesKeyPath, AES);
-        String encrypted = java.nio.file.Files.readString(java.nio.file.Paths.get(inputFile));
+        byte[] encrypted = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(inputFile));
         byte[] decrypted = decrypt(encrypted, aesKey, 5 * 60 * 1000);
         java.nio.file.Files.write(java.nio.file.Paths.get(outputFile), decrypted);
         System.out.println("File unprotected and written to " + outputFile);
@@ -575,11 +377,6 @@ public class CryptoUtils {
         System.out.println("AES key generated and saved to keys/" + outputFile);
     }
     
-    private static void cliGenerateHMACKey(String userId) throws Exception {
-        SecretKey hmacKey = generateHMACKey();
-        saveHMACKey(hmacKey, userId);
-        System.out.println("HMAC key generated for user: " + userId);
-    }
 
 
     public static SecretKey readKeyFromFile(String file, String algorithm) throws Exception {
@@ -588,42 +385,7 @@ public class CryptoUtils {
         return new SecretKeySpec(keyBytes, algorithm);
     }
     
-    /**
-     * Save HMAC key to file for a specific user.
-     * Keys are stored in keys/hmac/ directory.
-     */
-    public static void saveHMACKey(SecretKey hmacKey, String userId) throws Exception {
-        String b64 = Base64.getEncoder().encodeToString(hmacKey.getEncoded());
-        java.nio.file.Path hmacDir = java.nio.file.Paths.get("keys/hmac");
-        java.nio.file.Files.createDirectories(hmacDir);
-        String filename = userId.toLowerCase().replace(" ", "-") + "-hmac.key";
-        java.nio.file.Files.writeString(hmacDir.resolve(filename), b64);
-        System.out.println("HMAC key saved to keys/hmac/" + filename);
-    }
-    
-    /**
-     * Load HMAC key from file for a specific user.
-     */
-    public static SecretKey loadHMACKey(String userId) throws Exception {
-        String filename = userId.toLowerCase().replace(" ", "-") + "-hmac.key";
-        java.nio.file.Path keyPath = java.nio.file.Paths.get("keys/hmac", filename);
-        if (!java.nio.file.Files.exists(keyPath)) {
-            throw new java.io.FileNotFoundException("HMAC key not found for user: " + userId);
-        }
-        return readKeyFromFile(keyPath.toString(), HMAC_ALGORITHM);
-    }
-    
-    /**
-     * Initialize HMAC keys for all parties in the system.
-     * Should be run once to generate keys for buyer, seller, and any other parties.
-     */
-    public static void initializeHMACKeys(String... userIds) throws Exception {
-        System.out.println("Initializing HMAC keys for users...");
-        for (String userId : userIds) {
-            SecretKey hmacKey = generateHMACKey();
-            saveHMACKey(hmacKey, userId);
-        }
-        System.out.println("HMAC keys initialized successfully for " + userIds.length + " users.");
-    }
 
+    
+    
 }

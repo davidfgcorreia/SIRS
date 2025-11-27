@@ -6,9 +6,9 @@ public class Request {
     private final String privKeyFile;
     private final String pubKeyFile;
     private final String receiverPubKeyFile;
-    private final String dataFile;
+    private final byte[] dataFile;
 
-    public Request(String host, int port, String privKeyFile, String pubKeyFile, String receiverPubKeyFile, String dataFile) {
+    public Request(String host, int port, String privKeyFile, String pubKeyFile, String receiverPubKeyFile, byte[] dataFile) {
         this.host = host;
         this.port = port;
         this.privKeyFile = privKeyFile;
@@ -23,5 +23,5 @@ public class Request {
     public String getPrivKeyFile() { return privKeyFile; }
     public String getPubKeyFile() { return pubKeyFile; }
     public String getReceiverPubKeyFile() { return receiverPubKeyFile; }
-    public String getDataFile() { return dataFile; }
+    public byte[] getDataFile() { return dataFile; }
 }

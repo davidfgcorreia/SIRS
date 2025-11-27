@@ -1,7 +1,7 @@
 package com.chainofproduct.utils;
 
 import java.io.*;
-import javax.net.ssl.*;
+import java.net.*;
 import javax.crypto.SecretKey;
 import java.security.PrivateKey;
 import java.security.PublicKey;
@@ -12,18 +12,15 @@ import java.security.spec.X509EncodedKeySpec;;
 public class ApiCalls {
 
     // Sender logic: initiates handshake, receives session keys, sends encrypted data with HMAC
-    public static void actAsSender(String host, int port, String senderPrivKeyFile, String senderPubKeyFile, String receiverPubKeyFile, String dataFile, String senderId) throws Exception {
+    public static byte[] actAsSender(String host, int port, String senderPrivKeyFile, String senderPubKeyFile, String receiverPubKeyFile, String dataFile, String senderId) throws Exception {
         // Load sender's private and public key
         PrivateKey senderPrivateKey = loadPrivateKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(senderPrivKeyFile)));
         PublicKey senderPublicKey = loadPublicKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(senderPubKeyFile)));
         // Load receiver's public key
         PublicKey receiverPublicKey = loadPublicKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(receiverPubKeyFile)));
-        // Load sender's HMAC key
-        SecretKey senderHmacKey = CryptoUtils.loadHMACKey(senderId);
-        
-        // Connect
-        SSLSocketFactory sf = (SSLSocketFactory) SSLSocketFactory.getDefault();
-        try (SSLSocket socket = (SSLSocket) sf.createSocket(host, port)) {
+
+        byte[] result = null;
+        try (Socket socket = new Socket(host, port)) {
             DataOutputStream out = new DataOutputStream(socket.getOutputStream());
             DataInputStream in = new DataInputStream(socket.getInputStream());
             // --- 1. Handshake: send nonce, timestamp, signature, sender's public key ---
@@ -46,7 +43,7 @@ public class ApiCalls {
             String authResp = in.readUTF();
             if (!"AUTH_OK".equals(authResp)) {
                 System.err.println("Authentication failed: " + authResp);
-                return;
+                return null;
             }
             // --- 3. Receive session keys ---
             int sessLen = in.readInt();
@@ -56,33 +53,57 @@ public class ApiCalls {
             byte[] aesKeyBytes = new byte[32];
             System.arraycopy(sessionKeys, 0, aesKeyBytes, 0, 32);
             SecretKey aesKey = new javax.crypto.spec.SecretKeySpec(aesKeyBytes, "AES");
-            // --- 4. Encrypt and send data with HMAC ---
+            // --- 4. Encrypt and send data ---
             byte[] data = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(dataFile));
-            String encryptedData = CryptoUtils.encryptWithHMAC(data, aesKey, senderHmacKey, senderId);
-            byte[] encBytes = encryptedData.getBytes();
-            out.writeInt(encBytes.length);
-            out.write(encBytes);
+            byte[] encryptedData = CryptoUtils.encrypt(data, aesKey);
+            out.writeInt(encryptedData.length);
+            out.write(encryptedData);
             out.flush();
-            // --- 5. Wait for ACK ---
-            String ack = in.readUTF();
-            System.out.println("Server response: " + ack);
+            // --- 5. Wait for server response: could be TERMINATE or query result ---
+            String serverMsg = in.readUTF();
+            if ("TERMINATE".equals(serverMsg)) {
+                // Server wants to end connection
+                out.writeUTF("ACK");
+                out.flush();
+                String terminateAck = in.readUTF();
+                if ("TERMINATE_ACK".equals(terminateAck)) {
+                    System.out.println("Session terminated by server.");
+                }
+                return null;
+            } else {
+                // Assume this is the query result (could be binary or string)
+                // If you expect binary, adapt this logic
+                result = serverMsg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                out.writeUTF("ACK");
+                out.flush();
+                String terminateAck = in.readUTF();
+                if ("TERMINATE_ACK".equals(terminateAck)) {
+                    System.out.println("Session terminated after query.");
+                }
+            }
         }
+        return result;
     }
 
-    // Helper: sign data with private key (for handshake)
-    private static byte[] asymmetricSign(byte[] data, PrivateKey priv) throws Exception {
-        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
-        sig.initSign(priv);
-        sig.update(data);
-        return sig.sign();
+
+
+    /**
+     * ServerExecutor interface for server-specific request handling.
+     */
+    public interface ServerExecutor {
+        /**
+         * Process the decrypted request and return response bytes, or null to terminate.
+         * @param request The decrypted request bytes
+         * @return response bytes to send, or null to terminate
+         */
+        byte[] execute(byte[] request) throws Exception;
     }
 
-    // New handleClient: expects encrypted byte[] data with HMAC verification
-    public static DataWithSender handleClient(SSLSocket socket) throws Exception {
-
-        byte[] decryptedPayload = null;
-        String senderId = null;
-        
+    /**
+     * handleClient: receives, decrypts, and dispatches request to a ServerExecutor.
+     * Sends response or handles session termination protocol.
+     */
+    public static void handleClient(Socket socket, ServerExecutor executor) throws Exception {
         try (DataInputStream in = new DataInputStream(socket.getInputStream());
              DataOutputStream out = new DataOutputStream(socket.getOutputStream())) {
 
@@ -103,7 +124,7 @@ public class ApiCalls {
             if (!authOK) {
                 out.writeUTF("AUTH_FAIL");
                 out.flush();
-                return null;
+                return;
             }
             out.writeUTF("AUTH_OK");
             out.flush();
@@ -117,57 +138,54 @@ public class ApiCalls {
             out.write(encryptedSessionKeys);
             out.flush();
 
-            // --- 3. Receive encrypted data with HMAC ---
+            // --- 3. Receive encrypted data ---
             int payloadLen = in.readInt();
             byte[] encryptedPayload = new byte[payloadLen];
             in.readFully(encryptedPayload);
-            
-            // Decrypt with HMAC verification - try multiple user HMAC keys
-            CryptoUtils.DecryptedDataWithUser result = null;
-            String[] possibleUsers = {"Lays Chips", "Stealing Corporation", "Ching Chong Extractions"};
-            
-            for (String userId : possibleUsers) {
-                try {
-                    SecretKey hmacKey = CryptoUtils.loadHMACKey(userId);
-                    result = CryptoUtils.decryptWithHMAC(new String(encryptedPayload), aesKey, hmacKey, 5 * 60 * 1000);
-                    senderId = result.userId;
-                    decryptedPayload = result.data;
-                    System.out.println("Successfully decrypted data from: " + senderId);
-                    break;
-                } catch (Exception e) {
-                    // Try next user key
-                    continue;
-                }
-            }
-            
-            if (result == null) {
-                out.writeUTF("ERROR: HMAC verification failed for all known users");
+            byte[] decryptedPayload = CryptoUtils.decrypt(encryptedPayload, aesKey, 5 * 60 * 1000);
+            if (decryptedPayload == null) {
+                out.writeUTF("ERROR: Decryption failed");
                 out.flush();
-                return null;
+                return;
             }
 
-            System.out.println("Decrypted payload from " + senderId + ": " + new String(decryptedPayload));
-            out.writeUTF("ACK");
-            out.flush();
+            // --- 4. Call server executor ---
+            byte[] response = executor.execute(decryptedPayload);
+            if (response == null) {
+                // No response: terminate session
+                out.writeUTF("TERMINATE");
+                out.flush();
+                String ack = in.readUTF();
+                if ("ACK".equals(ack)) {
+                    out.writeUTF("TERMINATE_ACK");
+                    out.flush();
+                }
+                return;
+            } else {
+                // Encrypt and send response
+                byte[] encryptedResponse = CryptoUtils.encrypt(response, aesKey);
+                out.writeInt(encryptedResponse.length);
+                out.write(encryptedResponse);
+                out.flush();
+                String ack = in.readUTF();
+                if ("ACK".equals(ack)) {
+                    out.writeUTF("TERMINATE_ACK");
+                    out.flush();
+                }
+            }
         } finally {
-            // Cleanly close session
             try { socket.close(); } catch (Exception ignore) {}
         }
-        return new DataWithSender(decryptedPayload, senderId);
     }
-    
-    /**
-     * Result class containing decrypted data and sender ID
-     */
-    public static class DataWithSender {
-        public final byte[] data;
-        public final String senderId;
-        
-        public DataWithSender(byte[] data, String senderId) {
-            this.data = data;
-            this.senderId = senderId;
-        }
+
+        // Helper: sign data with private key (for handshake)
+    private static byte[] asymmetricSign(byte[] data, PrivateKey priv) throws Exception {
+        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+        sig.initSign(priv);
+        sig.update(data);
+        return sig.sign();
     }
+
 
     // Helper: verify signature and freshness
     private static boolean verifySignatureAndFreshness(byte[] nonce, long timestamp, byte[] signature, PublicKey senderPublicKey) throws Exception {
