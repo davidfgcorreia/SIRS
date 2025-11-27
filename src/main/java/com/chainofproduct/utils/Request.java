@@ -1,4 +1,4 @@
-package com.chainofproduct.server;
+package com.chainofproduct.utils;
 
 public class Request {
     private final String host;
@@ -7,16 +7,15 @@ public class Request {
     private final String pubKeyFile;
     private final String receiverPubKeyFile;
     private final String dataFile;
-    private final int requestType;
 
-    public Request(String host, int port, String privKeyFile, String pubKeyFile, String receiverPubKeyFile, String dataFile, int requestType) {
+    public Request(String host, int port, String privKeyFile, String pubKeyFile, String receiverPubKeyFile, String dataFile) {
         this.host = host;
         this.port = port;
         this.privKeyFile = privKeyFile;
         this.pubKeyFile = pubKeyFile;
         this.receiverPubKeyFile = receiverPubKeyFile;
         this.dataFile = dataFile;
-        this.requestType = requestType;
+
     }
 
     public String getHost() { return host; }
@@ -25,5 +24,4 @@ public class Request {
     public String getPubKeyFile() { return pubKeyFile; }
     public String getReceiverPubKeyFile() { return receiverPubKeyFile; }
     public String getDataFile() { return dataFile; }
-    public int getType() { return requestType; }
 }

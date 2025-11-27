@@ -1,6 +1,7 @@
 package com.chainofproduct.server;
 
 import com.chainofproduct.grpc.ServerServiceProto;
+import com.chainofproduct.utils.Request;
 import com.chainofproduct.grpc.ServerServiceGrpc;
 import io.grpc.stub.StreamObserver;
 import java.util.concurrent.BlockingQueue;

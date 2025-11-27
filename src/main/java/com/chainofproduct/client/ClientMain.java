@@ -9,11 +9,28 @@ import java.util.Scanner;
 
 public class ClientMain {
     public static void main(String[] args) {
-        String target = "localhost:50051"; // Adjust as needed
-        GrpcClient grpcClient = new GrpcClient(target);
-        ClientOperations operations = new ClientOperations(grpcClient.getStub());
+
+        // Shared queue and lock for sending requests (TLS direct communication)
+        java.util.concurrent.BlockingQueue<com.chainofproduct.utils.Request> sendQueue = new java.util.concurrent.LinkedBlockingQueue<>();
+        Object sendLock = new Object();
+
+        // Start the send manager thread for direct machine-to-machine communication
+        SendManager sendManager = new SendManager(sendQueue, sendLock);
+        Thread sendManagerThread = new Thread(sendManager);
+        sendManagerThread.setDaemon(true);
+        sendManagerThread.start();
+
+        // Pass sendQueue/sendLock to CLI or operations if needed for direct send commands
+        // (Extend CommandLine/ClientOperations as needed to enqueue direct send requests)
+
         CommandLine cli = new CommandLine(operations);
         cli.run();
+
+        // Shutdown send manager and gRPC client
+        sendManager.stop();
+        try {
+            sendManagerThread.join(1000);
+        } catch (InterruptedException ignored) {}
         grpcClient.shutdown();
     }
 }
