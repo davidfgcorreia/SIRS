@@ -1,36 +1,32 @@
 package com.chainofproduct.client;
 
-import com.chainofproduct.grpc.ServerServiceGrpc;
-import com.chainofproduct.grpc.ServerServiceProto;
-import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
-
-import java.util.Scanner;
-
 public class ClientMain {
     public static void main(String[] args) {
+        if (args.length < 1) {
+            System.err.println("Usage: java ClientMain <serverName>");
+            System.exit(1);
+        }
+        String serverName = args[0];
 
-        // Shared queue and lock for sending requests (TLS direct communication)
+        // Shared queue and lock for sending requests (if needed)
         java.util.concurrent.BlockingQueue<com.chainofproduct.utils.Request> sendQueue = new java.util.concurrent.LinkedBlockingQueue<>();
         Object sendLock = new Object();
 
-        // Start the send manager thread for direct machine-to-machine communication
+        // Start the send manager thread (if needed for direct communication)
         SendManager sendManager = new SendManager(sendQueue, sendLock);
         Thread sendManagerThread = new Thread(sendManager);
         sendManagerThread.setDaemon(true);
         sendManagerThread.start();
 
-        // Pass sendQueue/sendLock to CLI or operations if needed for direct send commands
-        // (Extend CommandLine/ClientOperations as needed to enqueue direct send requests)
-
+        // Pass serverName to operations/CLI
+        ClientOperations operations = new ClientOperations(sendQueue, sendLock, serverName);
         CommandLine cli = new CommandLine(operations);
         cli.run();
 
-        // Shutdown send manager and gRPC client
+        // Shutdown send manager
         sendManager.stop();
         try {
             sendManagerThread.join(1000);
         } catch (InterruptedException ignored) {}
-        grpcClient.shutdown();
     }
 }
