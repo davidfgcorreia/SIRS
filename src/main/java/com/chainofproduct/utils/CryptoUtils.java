@@ -76,7 +76,7 @@ public class CryptoUtils {
         long timestamp = Instant.now().toEpochMilli();
         byte[] nonce = generateNonce();
 
-        // Prepare plaintext: [timestamp (8 bytes)] [nonce (12 bytes)] + data
+        // Prepare plaintext: [timestamp (8 bytes)] [nonce (12 bytes)] + data 
         ByteBuffer plainBuf = ByteBuffer.allocate(8 + NONCE_LENGTH + data.length);
         plainBuf.putLong(timestamp);
         plainBuf.put(nonce);

@@ -1,10 +1,7 @@
-package com.chainofproduct.server;
+package com.chainofproduct.utils;
 
 import java.io.*;
 import javax.net.ssl.*;
-
-import com.chainofproduct.utils.CryptoUtils;
-
 import javax.crypto.SecretKey;
 import java.security.PrivateKey;
 import java.security.PublicKey;
@@ -12,7 +9,7 @@ import java.security.KeyFactory;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;;
 
-public class ApiServer {
+public class ApiCalls {
 
     // Sender logic: initiates handshake, receives session keys, sends encrypted data
     public static void actAsSender(String host, int port, String senderPrivKeyFile, String senderPubKeyFile, String receiverPubKeyFile, String dataFile) throws Exception {
@@ -59,7 +56,6 @@ public class ApiServer {
             // --- 4. Encrypt and send data ---
             byte[] data = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(dataFile));
             String encryptedData = CryptoUtils.encrypt(data, aesKey);
-            out.writeUTF("SEND_TRANSACTION");
             byte[] encBytes = encryptedData.getBytes();
             out.writeInt(encBytes.length);
             out.write(encBytes);
@@ -79,7 +75,10 @@ public class ApiServer {
     }
 
     // New handleClient: expects encrypted byte[] data, port, ip, sender's private key, receiver's public key
-    public static void handleClient(SSLSocket socket) throws Exception {
+    public static byte[] handleClient(SSLSocket socket) throws Exception {
+
+        byte[] decryptedPayload = null;
+        
         try (DataInputStream in = new DataInputStream(socket.getInputStream());
              DataOutputStream out = new DataOutputStream(socket.getOutputStream())) {
 
@@ -100,7 +99,7 @@ public class ApiServer {
             if (!authOK) {
                 out.writeUTF("AUTH_FAIL");
                 out.flush();
-                return;
+                return null;
             }
             out.writeUTF("AUTH_OK");
             out.flush();
@@ -115,30 +114,21 @@ public class ApiServer {
             out.flush();
 
             // --- 3. Sender encrypts and sends data using session keys ---
-            String command = in.readUTF();
             int payloadLen = in.readInt();
             byte[] encryptedPayload = new byte[payloadLen];
             in.readFully(encryptedPayload);
-            byte[] decryptedPayload = CryptoUtils.decrypt(new String(encryptedPayload), aesKey, 5 * 60 * 1000);
+            decryptedPayload = CryptoUtils.decrypt(new String(encryptedPayload), aesKey, 5 * 60 * 1000);
 
-            // --- 4. Receiver processes data and sends ACK ---
-            switch (command) {
-                case "SEND_TRANSACTION":
-                case "SEND_SHARE":
-                    // Store/process decryptedPayload as needed
-                    System.out.println("Received command: " + command);
-                    System.out.println("Decrypted payload: " + new String(decryptedPayload));
-                    out.writeUTF("ACK");
-                    out.flush();
-                    break;
-                default:
-                    out.writeUTF("ERROR: Unknown command");
-                    out.flush();
-            }
+            //call server operations with decryptedPayload
+
+            System.out.println("Decrypted payload: " + new String(decryptedPayload));
+            out.writeUTF("ACK");
+            out.flush();
         } finally {
             // Cleanly close session
             try { socket.close(); } catch (Exception ignore) {}
         }
+        return decryptedPayload;
     }
 
     // Helper: verify signature and freshness

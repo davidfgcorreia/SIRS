@@ -1,6 +1,7 @@
 package com.chainofproduct.server;
 
 import com.chainofproduct.db.DatabaseOperations;
+import com.chainofproduct.utils.ApiCalls;
 import com.chainofproduct.utils.CryptoUtils;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
@@ -44,7 +45,7 @@ public class Main {
                     final javax.net.ssl.SSLSocket socket = (javax.net.ssl.SSLSocket) serverSocket.accept();
                     receiverPool.submit(() -> {
                         try {
-                            ApiServer.handleClient(socket);
+                            ApiCalls.handleClient(socket);
                         } catch (Exception e) {
                             e.printStackTrace();
                         }
@@ -87,7 +88,7 @@ public class Main {
                             try {
                                 if (req.getType() == 1 || req.getType() == 2) {
                                     // Updated: pass senderPrivKeyFile, senderPubKeyFile, receiverPubKeyFile, dataFile
-                                    ApiServer.actAsSender(
+                                    ApiCalls.actAsSender(
                                         req.getHost(),
                                         req.getPort(),
                                         req.getPrivKeyFile(),
