@@ -1,0 +1,81 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36" version="29.2.0">
+  <diagram name="Page-1" id="sfTMU7kiQ6NDH4H_J25k">
+    <mxGraphModel dx="1351" dy="933" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="M3MVM_X41uS2IrTm5NGy-8" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=none;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="280" y="487.5" as="sourcePoint" />
+            <mxPoint x="360" y="485" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="M3MVM_X41uS2IrTm5NGy-16" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" value="CryptoUtils" vertex="1">
+          <mxGeometry height="440" width="540" x="310" y="140" as="geometry">
+            <mxRectangle height="30" width="100" x="190" y="100" as="alternateBounds" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="M3MVM_X41uS2IrTm5NGy-17" parent="M3MVM_X41uS2IrTm5NGy-16" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;spacing=7;" value="&lt;u&gt;- AES : String&lt;/u&gt;&lt;div&gt;&lt;u&gt;- AES_GCM : String&lt;/u&gt;&lt;/div&gt;&lt;div&gt;&lt;u&gt;- GCM_TAG_LENGHT : int&lt;/u&gt;&lt;/div&gt;&lt;div&gt;&lt;u&gt;- IV_LENGTH : int&lt;/u&gt;&lt;/div&gt;&lt;div&gt;&lt;u&gt;- VERSION : int&lt;/u&gt;&lt;/div&gt;&lt;div&gt;&lt;u&gt;- NOUNCE_LENGTH : int&lt;/u&gt;&lt;/div&gt;&lt;div&gt;&lt;u&gt;- usedNounces : Map&amp;lt;String, Long&amp;gt;&lt;/u&gt;&lt;/div&gt;&lt;div&gt;&lt;u&gt;- nounceCleanupTimer : Timer&lt;/u&gt;&lt;/div&gt;&lt;div&gt;&lt;u&gt;- SECURE_RANDOM : SecureRandom&lt;/u&gt;&lt;/div&gt;&lt;div&gt;&lt;u&gt;- CLOCK_DRIFT_TOLERANCE : long&lt;/u&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="164" width="540" y="26" as="geometry" />
+        </mxCell>
+        <mxCell id="M3MVM_X41uS2IrTm5NGy-18" parent="M3MVM_X41uS2IrTm5NGy-16" style="line;strokeWidth=1;fillColor=none;align=left;verticalAlign=middle;spacingTop=-1;spacingLeft=3;spacingRight=3;rotatable=0;labelPosition=right;points=[];portConstraint=eastwest;strokeColor=inherit;" value="" vertex="1">
+          <mxGeometry height="8" width="540" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="M3MVM_X41uS2IrTm5NGy-19" parent="M3MVM_X41uS2IrTm5NGy-16" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" value="+ GenerateAESKey(keySize: int) : SecretKey&lt;div&gt;+ encrypt(data: byte[], key: SecretKey) : byte[]&lt;/div&gt;&lt;div&gt;+ encrypt(data: byte[], key: SecretKey, aad: byte[]) : byte[]&lt;/div&gt;&lt;div&gt;+ decrypt(inpaut: byte[], key: SecretKey, maxAgeMillis: long) : byte[]&lt;/div&gt;&lt;div&gt;+&amp;nbsp;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;decrypt(input: byte[], key:&lt;/span&gt;&lt;span style=&quot;background-color: transparent;&quot;&gt;&amp;nbsp;&lt;/span&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;&amp;nbsp;SecretKey, maxAgeMillis: long, aad: byte[]) : byte[]&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;+ verifySafety(all: byte[], aesKey: SecretKey, maxAgeMillis: long, add: byte[]) : VerificationResult&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;+ generateNounce() : byte[]&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;+ generateIV() : byte[]&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;+ getKeyFromBytes(keyBytes: bytes[]): SecretKey&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;&lt;div&gt;+ readKeyFromFile(file: String, algorithm: String) : SecretKey&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;&lt;br&gt;&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- zeroArray(array: byte[]) : void&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- printCliHelp() : void&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- cliProtect(inputFile: String, aesKeyPath: String, outputFile: String) : void&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- cliCheck(inputFile: String, aesKeyPath: String) : void&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- cliUnprotect(inputFile: String, aesKeyPath: String, outputFile: String) : void&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- cliGenerateAESKey(outputFile: String) : void&lt;/span&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="242" width="540" y="198" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-5" parent="1" style="shape=umlFrame;whiteSpace=wrap;html=1;pointerEvents=0;" value="Utils" vertex="1">
+          <mxGeometry height="490" width="1155" x="245" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-6" parent="1" style="shape=folder;fontStyle=1;spacingTop=10;tabWidth=40;tabHeight=14;tabPosition=left;html=1;whiteSpace=wrap;" value="Server" vertex="1">
+          <mxGeometry height="75" width="120" x="820" y="682.5" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-9" parent="1" style="shape=folder;fontStyle=1;spacingTop=10;tabWidth=40;tabHeight=14;tabPosition=left;html=1;whiteSpace=wrap;" value="Client" vertex="1">
+          <mxGeometry height="75" width="120" x="510" y="682.5" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-11" parent="1" style="shape=folder;fontStyle=1;spacingTop=10;tabWidth=40;tabHeight=14;tabPosition=left;html=1;whiteSpace=wrap;" value="Database" vertex="1">
+          <mxGeometry height="80" width="120" x="1120" y="677.5" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-12" parent="1" style="swimlane;fontStyle=1;align=center;verticalAlign=top;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;" value="VerificationResult" vertex="1">
+          <mxGeometry height="120" width="430" x="930" y="295" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-13" parent="z18UDyqGYv-VubdOahoa-12" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" value="+ iv: byte[]&lt;div&gt;+ ciphertext: byte[]&lt;/div&gt;&lt;div&gt;+ plainWithTimestamp: byte[]&lt;/div&gt;" vertex="1">
+          <mxGeometry height="54" width="430" y="26" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-14" parent="z18UDyqGYv-VubdOahoa-12" style="line;strokeWidth=1;fillColor=none;align=left;verticalAlign=middle;spacingTop=-1;spacingLeft=3;spacingRight=3;rotatable=0;labelPosition=right;points=[];portConstraint=eastwest;strokeColor=inherit;" value="" vertex="1">
+          <mxGeometry height="8" width="430" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-15" parent="z18UDyqGYv-VubdOahoa-12" style="text;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=4;spacingRight=4;overflow=hidden;rotatable=0;points=[[0,0.5],[1,0.5]];portConstraint=eastwest;whiteSpace=wrap;html=1;" value="+ VerificationResult(iv: byte[], ciphertext: byte[], plainTextTimestamp: byte[])" vertex="1">
+          <mxGeometry height="32" width="430" y="88" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-17" edge="1" parent="1" source="z18UDyqGYv-VubdOahoa-13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.238;entryDx=0;entryDy=0;entryPerimeter=0;dashed=1;" target="M3MVM_X41uS2IrTm5NGy-19">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-18" edge="1" parent="1" source="z18UDyqGYv-VubdOahoa-9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0;exitDx=80;exitDy=14;exitPerimeter=0;entryX=0.48;entryY=1.004;entryDx=0;entryDy=0;entryPerimeter=0;dashed=1;" target="z18UDyqGYv-VubdOahoa-5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-25" connectable="0" parent="z18UDyqGYv-VubdOahoa-18" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=14;" value="&amp;lt;&amp;lt;import&amp;gt;&amp;gt;" vertex="1">
+          <mxGeometry relative="1" x="-0.1021" y="3" as="geometry">
+            <mxPoint x="8" y="18" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-19" edge="1" parent="1" source="z18UDyqGYv-VubdOahoa-6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0;exitDx=80;exitDy=14;exitPerimeter=0;entryX=0.58;entryY=1.007;entryDx=0;entryDy=0;entryPerimeter=0;dashed=1;" target="z18UDyqGYv-VubdOahoa-5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-21" connectable="0" parent="z18UDyqGYv-VubdOahoa-19" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=14;" value="&amp;lt;&amp;lt;import&amp;gt;&amp;gt;" vertex="1">
+          <mxGeometry relative="1" x="-0.5517" y="1" as="geometry">
+            <mxPoint x="51" y="-8" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-20" edge="1" parent="1" source="z18UDyqGYv-VubdOahoa-11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0;exitDx=80;exitDy=14;exitPerimeter=0;entryX=0.638;entryY=1.007;entryDx=0;entryDy=0;entryPerimeter=0;dashed=1;" target="z18UDyqGYv-VubdOahoa-5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="z18UDyqGYv-VubdOahoa-26" connectable="0" parent="z18UDyqGYv-VubdOahoa-20" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];fontSize=14;" value="&amp;lt;&amp;lt;import&amp;gt;&amp;gt;" vertex="1">
+          <mxGeometry relative="1" x="0.1345" y="-3" as="geometry">
+            <mxPoint x="-1" y="23" as="offset" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
