@@ -3,19 +3,13 @@ package com.chainofproduct.server;
 import com.chainofproduct.db.DatabaseOperations;
 import com.chainofproduct.utils.ApiCalls;
 import com.chainofproduct.utils.CryptoUtils;
-import com.chainofproduct.utils.Request;
-
-import io.grpc.Server;
-import io.grpc.ServerBuilder;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
 
 public class Main {
     public static void main(String[] args) throws Exception {
-        // SET SERVER IDENTITY - Configure which company this server represents
-        // This MUST match one of the companies in destination_ips table
-        // Options: "Lays Chips", "Stealing Corporation", "Ching Chong Extractions"
-        String serverIdentity = System.getProperty("server.name", "Lays Chips");
+        // SET SERVER IDENTITY - This is the CENTRAL SERVER that all clients connect to
+        // Default: "Central Server" (neutral mediator between all companies)
+        // Can be overridden via: -Dserver.name="Custom Name"
+        String serverIdentity = System.getProperty("server.name", "Central Server");
         DatabaseOperations.setServerName(serverIdentity);
         System.out.println("Server identity set to: " + serverIdentity);
         
@@ -26,107 +20,34 @@ public class Main {
         } catch (Throwable t) {
             System.err.println("Warning: failed to initialize CryptoUtils: " + t.getMessage());
         }
-        // Shared queue and lock for sender requests
-        BlockingQueue<Request> sendQueue = new LinkedBlockingQueue<>();
-        Object sendLock = new Object();
 
-        // Start TLS receiver thread (copied from ApiServer)
+        // Create ServerOperations to handle requests
+        final ServerOperations serverOps = new ServerOperations();
+
+        // Start TLS receiver thread - this is the ONLY communication channel now
         final int TLS_PORT = 8443;
-        final String KEYSTORE = "server-keystore.jks";
-        final String KEYSTORE_PASSWORD = "changeit";
-
         
-        Thread receiverThread = new Thread(() -> {
-            System.setProperty("javax.net.ssl.keyStore", KEYSTORE);
-            System.setProperty("javax.net.ssl.keyStorePassword", KEYSTORE_PASSWORD);
-            javax.net.ssl.SSLServerSocketFactory ssf = (javax.net.ssl.SSLServerSocketFactory) javax.net.ssl.SSLServerSocketFactory.getDefault();
-            try (javax.net.ssl.SSLServerSocket serverSocket = (javax.net.ssl.SSLServerSocket) ssf.createServerSocket(TLS_PORT)) {
-                System.out.println("API Server listening on port " + TLS_PORT + " (TLS)");
-                java.util.concurrent.ExecutorService receiverPool = java.util.concurrent.Executors.newFixedThreadPool(10);
-                while (true) {
-                    final javax.net.ssl.SSLSocket socket = (javax.net.ssl.SSLSocket) serverSocket.accept();
-                    receiverPool.submit(() -> {
-                        try {
-                            ApiCalls.DataWithSender result = ApiCalls.handleClient(socket);
-                            if (result != null) {
-                                System.out.println("Received data from: " + result.senderId);
-                                // TODO: Process result.data based on transaction type
-                            }
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                        }
-                    });
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        });
-        receiverThread.setDaemon(true);
-        receiverThread.start();
-
-        // Start gRPC server
-        int grpcPort = 50051; // Default gRPC port
-        Server grpcServer = ServerBuilder.forPort(grpcPort)
-                .addService(new ServerServiceImpl(sendQueue, sendLock))
-                .build()
-                .start();
-        System.out.println("gRPC API server started, listening on port " + grpcPort);
-
-        // Start the sender manager thread (similar to ApiServer)
-        Thread senderManager = new Thread(() -> {
+        try (java.net.ServerSocket serverSocket = new java.net.ServerSocket(TLS_PORT)) {
+            System.out.println("Central Server listening on port " + TLS_PORT + " - Ready for client connections");
+            java.util.concurrent.ExecutorService receiverPool = java.util.concurrent.Executors.newFixedThreadPool(10);
+            
             while (true) {
-                try {
-                    final Request req;
-                    synchronized (sendLock) {
-                        while (sendQueue.isEmpty()) {
-                            try {
-                                sendLock.wait();
-                            } catch (InterruptedException e) {
-                                // Allow thread to exit on interrupt
-                                return;
-                            }
-                        }
-                        req = sendQueue.poll();
+                final java.net.Socket socket = serverSocket.accept();
+                receiverPool.submit(() -> {
+                    try {
+                        // Use custom executor to process requests and return responses
+                        ApiCalls.handleClient(socket, (byte[] request) -> {
+                            return serverOps.processRequest(request);
+                        });
+                    } catch (Exception e) {
+                        System.err.println("Error handling client: " + e.getMessage());
+                        e.printStackTrace();
                     }
-                    if (req != null) {
-                        // Type 1 = transaction, Type 2 = share
-                        Runnable sendTask = () -> {
-                            try {
-                                if (req.getType() == 1 || req.getType() == 2) {
-                                    // Updated: pass senderPrivKeyFile, senderPubKeyFile, receiverPubKeyFile, dataFile, senderId
-                                    ApiCalls.actAsSender(
-                                        req.getHost(),
-                                        req.getPort(),
-                                        req.getPrivKeyFile(),
-                                        req.getPubKeyFile(),
-                                        req.getReceiverPubKeyFile(),
-                                        req.getDataFile(),
-                                        serverIdentity  // Pass server identity as sender ID
-                                    );
-                                }
-                            } catch (Exception e) {
-                                e.printStackTrace();
-                            }
-                        };
-                        // Use a thread pool if needed, for now just run in new thread
-                        new Thread(sendTask).start();
-                    }
-                } catch (Exception e) {
-                    // Allow thread to exit on interrupt or handle other exceptions
-                    break;
-                }
+                });
             }
-        });
-        senderManager.setDaemon(true);
-        senderManager.start();
-
-        // Add shutdown hook for clean exit
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("Shutting down gRPC server...");
-            grpcServer.shutdown();
-        }));
-
-        // Keep main thread alive
-        grpcServer.awaitTermination();
+        } catch (Exception e) {
+            System.err.println("Fatal server error: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 }

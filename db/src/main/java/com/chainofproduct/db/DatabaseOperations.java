@@ -5,9 +5,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class DatabaseOperations {
-  private static final String DB_URL = "jdbc:postgresql://localhost:5432/server-name";
-  private static final String ADMIN_USER = "server-name";
-  private static final String ADMIN_PASSWORD = "password";
+    private static final String DB_URL = "jdbc:postgresql://localhost:5433/chainofproduct_central";
+    private static final String ADMIN_USER = "chainofproduct_admin";
+    private static final String ADMIN_PASSWORD = "password";
 
   // Server identity - should be configured based on which server this is
   private static String SERVER_NAME = "Lays Chips"; // Default, should be configurable
@@ -21,8 +21,9 @@ public class DatabaseOperations {
   }
 
   public static void insertTransaction(long id, long timestamp, String seller, String buyer, String product, long units,
-      long amount) throws SQLException {
-    String sql = "INSERT INTO transaction (id, timestamp, seller, buyer, product, units, amount) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING";
+      long amount,
+                                         String sellerSignature, String buyerSignature, String encryptedData) throws SQLException {
+    String sql = "INSERT INTO transaction (id, timestamp, seller, buyer, product, units, amount, seller_signature, buyer_signature, encrypted_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING";
     try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
         PreparedStatement pstmt = conn.prepareStatement(sql)) {
       pstmt.setLong(1, id);
@@ -32,17 +33,22 @@ public class DatabaseOperations {
       pstmt.setString(5, product);
       pstmt.setLong(6, units);
       pstmt.setLong(7, amount);
+            pstmt.setString(8, sellerSignature);
+            pstmt.setString(9, buyerSignature);
+            pstmt.setString(10, encryptedData);
       pstmt.executeUpdate();
     }
   }
 
-  public static void addShare(long transactionId, String share, String sharedBy) throws SQLException {
-    String sql = "INSERT INTO transaction_shares (id, share, shared_by) VALUES (?, ?, ?) ON CONFLICT DO NOTHING";
+  public static void addShare(long transactionId, String share, String sharedBy, long timestamp, String signature) throws SQLException {
+    String sql = "INSERT INTO transaction_shares (id, share, shared_by, share_timestamp, share_signature) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id, share, shared_by) DO NOTHING";
     try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
         PreparedStatement pstmt = conn.prepareStatement(sql)) {
       pstmt.setLong(1, transactionId);
       pstmt.setString(2, share);
-      pstmt.setString(3, sharedBy); // 'seller' or 'buyer'
+      pstmt.setString(3, sharedBy);
+      pstmt.setLong(4, timestamp);
+      pstmt.setString(5, signature);
       pstmt.executeUpdate();
     }
   }
@@ -92,7 +98,11 @@ public class DatabaseOperations {
             rs.getString("buyer"),
             rs.getString("product"),
             rs.getLong("units"),
-            rs.getLong("amount")));
+                    rs.getLong("amount"),
+                    rs.getString("seller_signature"),
+                    rs.getString("buyer_signature"),
+                    rs.getString("encrypted_data")
+                ));
       }
     }
     return transactions;
@@ -112,7 +122,10 @@ public class DatabaseOperations {
               rs.getString("buyer"),
               rs.getString("product"),
               rs.getLong("units"),
-              rs.getLong("amount"));
+              rs.getLong("amount"),
+              rs.getString("seller_signature"),
+              rs.getString("buyer_signature"),
+              rs.getString("encrypted_data"));
         }
       }
     }
@@ -159,6 +172,87 @@ public class DatabaseOperations {
       pstmt.executeUpdate();
     }
   }
+    /**
+     * Get company information (name, public key) for a company name.
+     * Returns null if company not found.
+     */
+    public static CompanyInfo getCompanyInfo(String companyName) throws SQLException {
+        String sql = "SELECT name, public_key FROM companies WHERE name = ?";
+        try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, companyName);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return new CompanyInfo(
+                        rs.getString("name"),
+                        rs.getString("public_key")
+                    );
+                }
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Add a company to the companies table.
+     */
+    public static void addCompany(String name, String publicKey) throws SQLException {
+        String sql = "INSERT INTO companies (name, public_key) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET public_key = ?";
+        try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, name);
+            pstmt.setString(2, publicKey);
+            pstmt.setString(3, publicKey);
+            pstmt.executeUpdate();
+        }
+    }
+    
+    /**
+     * Get share records with cryptographic proofs (SR4).
+     */
+    public static List<ShareRecord> getShareRecords(long transactionId) throws SQLException {
+        String sql = "SELECT share, shared_by, share_timestamp, share_signature FROM transaction_shares WHERE id = ?";
+        List<ShareRecord> shares = new ArrayList<>();
+        try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
+            PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, transactionId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    shares.add(new ShareRecord(
+                        rs.getString("share"),
+                        rs.getString("shared_by"),
+                        rs.getLong("share_timestamp"),
+                        rs.getString("share_signature")
+                    ));
+                }
+            }
+        }
+        return shares;
+    }
+    
+    /**
+     * Get share records filtered by who shared them (SR4).
+     */
+    public static List<ShareRecord> getShareRecordsBySharedBy(long transactionId, String sharedBy) throws SQLException {
+        String sql = "SELECT share, shared_by, share_timestamp, share_signature FROM transaction_shares WHERE id = ? AND shared_by = ?";
+        List<ShareRecord> shares = new ArrayList<>();
+        try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
+            PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setLong(1, transactionId);
+            pstmt.setString(2, sharedBy);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    shares.add(new ShareRecord(
+                        rs.getString("share"),
+                        rs.getString("shared_by"),
+                        rs.getLong("share_timestamp"),
+                        rs.getString("share_signature")
+                    ));
+                }
+            }
+        }
+        return shares;
+    }
 
   // TransactionRecord inner class for returning transaction data
   public static class TransactionRecord {
@@ -169,9 +263,12 @@ public class DatabaseOperations {
     public final String product;
     public final long units;
     public final long amount;
+    public final String sellerSignature;
+    public final String buyerSignature;
+    public final String encryptedData;
 
     public TransactionRecord(long id, long timestamp, String seller, String buyer, String product, long units,
-        long amount) {
+        long amount, String sellerSignature, String buyerSignature, String encryptedData) {
       this.id = id;
       this.timestamp = timestamp;
       this.seller = seller;
@@ -179,6 +276,9 @@ public class DatabaseOperations {
       this.product = product;
       this.units = units;
       this.amount = amount;
+      this.sellerSignature = sellerSignature;
+      this.buyerSignature = buyerSignature;
+      this.encryptedData = encryptedData;
     }
   }
 
@@ -196,4 +296,30 @@ public class DatabaseOperations {
       this.publicKey = publicKey;
     }
   }
+    
+    // CompanyInfo inner class for returning company data
+    public static class CompanyInfo {
+        public final String name;
+        public final String publicKey;
+        
+        public CompanyInfo(String name, String publicKey) {
+            this.name = name;
+            this.publicKey = publicKey;
+        }
+    }
+    
+    // ShareRecord class for returning share data with cryptographic proof (SR4)
+    public static class ShareRecord {
+        public final String share;
+        public final String sharedBy;
+        public final long timestamp;
+        public final String signature;
+        
+        public ShareRecord(String share, String sharedBy, long timestamp, String signature) {
+            this.share = share;
+            this.sharedBy = sharedBy;
+            this.timestamp = timestamp;
+            this.signature = signature;
+        }
+    }
 }

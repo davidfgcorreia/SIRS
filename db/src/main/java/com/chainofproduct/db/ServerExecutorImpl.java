@@ -57,8 +57,11 @@ public class ServerExecutorImpl implements ServerExecutor {
         product = json.get("product").asText();
         units = json.get("units").asInt();
         amount = json.get("amount").asInt();
+        String sellerSignature = json.has("sellerSignature") ? json.get("sellerSignature").asText() : "";
+        String buyerSignature = json.has("buyerSignature") ? json.get("buyerSignature").asText() : "";
+        String encryptedData = json.has("encryptedData") ? json.get("encryptedData").asText() : null;
         try {
-          DatabaseOperations.insertTransaction(id, timestamp, seller, buyer, product, units, amount);
+          DatabaseOperations.insertTransaction(id, timestamp, seller, buyer, product, units, amount, sellerSignature, buyerSignature, encryptedData);
         } catch (SQLException e) {
           // do something
         }
@@ -69,8 +72,10 @@ public class ServerExecutorImpl implements ServerExecutor {
         transactionId = json.get("transactionId").asInt();
         share = json.get("share").asText();
         sharedBy = json.get("sharedBy").asText();
+        long shareTimestamp = json.has("timestamp") ? json.get("timestamp").asLong() : System.currentTimeMillis();
+        String shareSignature = json.has("signature") ? json.get("signature").asText() : "";
         try {
-          DatabaseOperations.addShare(transactionId, share, sharedBy);
+          DatabaseOperations.addShare(transactionId, share, sharedBy, shareTimestamp, shareSignature);
         } catch (SQLException e) {
           // do something
         }

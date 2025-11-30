@@ -1,361 +1,455 @@
 package com.chainofproduct.server;
 
 import com.chainofproduct.db.DatabaseOperations;
-import com.chainofproduct.utils.Request;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.chainofproduct.utils.CryptoUtils;
 
-import java.io.IOException;
+import javax.crypto.SecretKey;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.security.PrivateKey;
+import java.security.PublicKey;
 import java.sql.SQLException;
-import java.util.concurrent.BlockingQueue;
+import java.util.Base64;
+import java.util.List;
 
 /**
- * ServerOperations - fills TODOs:
- *  - handleSendTransaction: resolve destination, optionally insert a transaction row,
- *    create a Request and enqueue it for sender manager.
- *  - handleTransactionRequest / handleShareRequest: enqueue requests and notify sender manager.
- *  - handleReceiveTransaction / handleReceiveShare: process decrypted payloads and store in DB.
+ * ServerOperations - handles all client requests in centralized architecture with full security.
+ * Implements SR1-SR4 security requirements for Chain of Product.
  */
 public class ServerOperations {
-    private final BlockingQueue<Request> sendQueue;
-    private final Object sendLock;
-    private final ObjectMapper objectMapper = new ObjectMapper();
     private final String serverName;
+    private final PrivateKey serverPrivateKey;
+    private final SecretKey storageKey; // For encrypting transactions at rest (SR1)
 
-    public ServerOperations(BlockingQueue<Request> sendQueue, Object sendLock) {
-        this.sendQueue = sendQueue;
-        this.sendLock = sendLock;
+    public ServerOperations() throws Exception {
         this.serverName = DatabaseOperations.getServerName();
-        
+        // Load server's private key for signing share operations
+        this.serverPrivateKey = CryptoUtils.loadPrivateKey("keys/server-private.key");
+        // Load or generate storage encryption key for database
+        this.storageKey = loadOrGenerateStorageKey();
     }
-
+    
     /**
-     * Handle send transaction with proper validation and share checking.
-     * 
-     * Flow:
-     * 1. Parse and validate JSON transaction data
-     * 2. Confirm server is buyer or seller
-     * 3. Resolve destination info from database
-     * 4. Store transaction in the database
-     * 5. Check for required shares
-     * 6. If shares missing, forward to other party for share generation
-     * 7. Enqueue request for sending
-     * 
-     * Destination can be either:
-     * - Company name (resolved from DB)
-     * - Full format: host:port:privKeyFile:pubKeyFile:receiverPubKeyFile
+     * Load or generate AES key for encrypting transactions at rest (SR1).
      */
-    public boolean handleSendTransaction(String dataFile, String destination) {
-
-        boolean sellerFlag = false;
-        boolean parterHasTransaction = false;
-        DatabaseOperations.DestinationInfo destInfoShare = null;
-        String seller ;
-        String buyer ;
-
-        String privKeyFile = "keys/" + serverName.toLowerCase().replace(" ", "-") + "-private.key";
-        String pubKeyFile = "keys/" + serverName.toLowerCase().replace(" ", "-") + "-public.key";
-
-        if (destination == null || destination.isEmpty()) {
-            System.err.println("handleSendTransaction: destination is empty");
-            return false;
-        }
-        
-        // Read and parse transaction JSON
-        JsonNode root = null;
-
-        
+    private SecretKey loadOrGenerateStorageKey() throws Exception {
+        String keyPath = "keys/storage-key.aes";
         try {
-            byte[] raw = Files.readAllBytes(Paths.get(dataFile));
-            String content = new String(raw);
-            root = tryParseJson(content);
-            
-            if (root == null 
-                || !root.hasNonNull("id") 
-                || !root.hasNonNull("timestamp")
-                || !root.hasNonNull("seller") 
-                || !root.hasNonNull("buyer") 
-                || !root.hasNonNull("product") 
-                || !root.hasNonNull("units") 
-                || !root.hasNonNull("amount")) {
-                System.err.println("handleSendTransaction: Invalid JSON - missing required fields (id, timestamp, seller, buyer, product, units, amount)");
-                return false;
-            }
-            if (!root.get("id").canConvertToLong() || !root.get("timestamp").canConvertToLong()
-                || !root.get("units").canConvertToLong() || !root.get("amount").canConvertToLong()) {
-                System.err.println("handleSendTransaction: id, timestamp, units, and amount must be numbers");
-                return false;
-            }
-            
-            // Extract transaction fields
-            long id = root.get("id").asLong();
-            long timestamp = root.get("timestamp").asLong();
-            seller = root.get("seller").asText();
-            buyer = root.get("buyer").asText();
-            String product = root.get("product").asText();
-            long units = root.get("units").asLong();
-            long amount = root.get("amount").asLong();
-            
-            // VALIDATION: Confirm server is buyer or seller
-            if (!serverName.equals(seller) && !serverName.equals(buyer)) {
-                System.err.println("handleSendTransaction: Invalid Transaction - server '" + serverName + 
-                    "' is neither seller '" + seller + "' nor buyer '" + buyer + "'");
-                return false;
-            }
-            
-            System.out.println("Transaction validated: server is " + 
-                (serverName.equals(seller) ? "seller" : "buyer"));
-            sellerFlag = serverName.equals(seller);
-            
-            // Store transaction in database
-            try {
-                DatabaseOperations.insertTransaction(id, timestamp, seller, buyer, product, units, amount);
-                System.out.println("Stored transaction id=" + id + " in database");
-
-                // NEW: Check all shares for this transaction id
-                try {
-                    java.util.List<String> partnerShares = DatabaseOperations.getSharesBySharedBy(id, sellerFlag ? buyer : seller);
-                    System.out.println("Shares sent by (" + (sellerFlag ? buyer : seller) + "): " + partnerShares);
-                    // Optionally, check if a share was already sent by me (serverName) to buyer or seller
-                    java.util.List<String> myShares = DatabaseOperations.getSharesBySharedBy(id, serverName);
-                    System.out.println("Shares sent by me (" + serverName + "): " + myShares);
-                    // Determine if partner sent me the transaction (true = already sent, false = not sent)
-                    parterHasTransaction = partnerShares != null && !partnerShares.isEmpty();
-                    System.out.println("Partner sent me transaction? " + parterHasTransaction);
-                } catch (SQLException sqe) {
-                    System.err.println("Failed to fetch shares for transaction: " + sqe.getMessage());
-                }
-            } catch (SQLException sqe) {
-                System.err.println("Failed to store transaction: " + sqe.getMessage());
-                return false;
-            }
-
-
-            // Determine which party to forward to for share generation
-                String otherParty = sellerFlag ? seller : buyer;
-                System.out.println("Forwarding transaction to " + otherParty + " for share generation");
-                
-                // Resolve destination info from database
-                destInfoShare = DatabaseOperations.getDestinationInfo(otherParty);
-                if (destInfoShare == null) {
-                    System.err.println("Cannot resolve destination info for: " + otherParty);
-                    return false;
-                }
-            if (!parterHasTransaction) {
-                                
-                // Record share propagation
-                DatabaseOperations.addShare(id, otherParty, serverName);
-                
-                // Build request with resolved info (need to determine key files)
-                // For now, using placeholder key files - should be configured
-                //
-                
-                //send transaction data to other party if they dont have it
-                Request reqtr = new Request(
-                    destInfoShare.ip, 
-                    destInfoShare.port, 
-                    privKeyFile, 
-                    pubKeyFile, 
-                    destInfoShare.publicKey,
-                    dataFile, 
-                    1 // Type 1 = trasction sahre
-                );
-                enqueueRequest(reqtr);
-                System.out.println("Enqueued share request to " + otherParty);
-
-
-                //send share to other party
-                Request reqstr = new Request(
-                    destInfoShare.ip, 
-                    destInfoShare.port, 
-                    privKeyFile, 
-                    pubKeyFile, 
-                    destInfoShare.publicKey,
-                    serverName + "|" + id + "|" + otherParty, 
-                    2 // Type 2 = transaction share
-                );
-                enqueueRequest(reqstr);
-                System.out.println("Enqueued share request to " + otherParty);
-
-            }
-            
-        } catch (IOException ioe) {
-            System.err.println("handleSendTransaction: failed to read dataFile: " + ioe.getMessage());
-            return false;
-        } catch (SQLException sqe) {
-            System.err.println("handleSendTransaction: database error: " + sqe.getMessage());
-            return false;
+            return CryptoUtils.readKeyFromFile(keyPath, "AES");
+        } catch (Exception e) {
+            // Generate new key if doesn't exist
+            SecretKey key = CryptoUtils.generateAESKey(256);
+            String b64 = Base64.getEncoder().encodeToString(key.getEncoded());
+            Files.createDirectories(Paths.get("keys"));
+            Files.writeString(Paths.get(keyPath), b64);
+            return key;
         }
-        
-
-        DatabaseOperations.DestinationInfo destInfo= null;    
-            try {
-                destInfo = DatabaseOperations.getDestinationInfo(destination);
-                if (destInfo == null) {
-                    System.err.println("handleSendTransaction: destination company not found: " + destination);
-                    return false;
-                }
-                
-                System.out.println("Resolved destination: " + destination + " -> " + destInfo.ip + ":" + destInfo.port);
-            } catch (SQLException sqe) {
-                System.err.println("handleSendTransaction: failed to resolve destination: " + sqe.getMessage());
-                return false;
-            }
-        
-        // Build the Request and enqueue it
-        Request req = new Request(destInfo.ip, destInfo.port, privKeyFile, pubKeyFile, destInfo.publicKey, dataFile, 1);
-        enqueueRequest(req);
-
-        Request reqShare = new Request(destInfoShare.ip, destInfoShare.port, privKeyFile, pubKeyFile, destInfoShare.publicKey, serverName + "|" + destination, 2);
-        enqueueRequest(reqShare);
-
-        return true;
     }
 
     /**
-     * Enqueue a Request and notify the sender manager via sendLock.
+     * Main entry point for processing client requests.
+     * @param request The decrypted request bytes from client
+     * @return response bytes to send back, or null if no response needed
      */
-    public void handleTransactionRequest(Request req) {
-        if (req == null) return;
-        enqueueRequest(req);
-    }
-
-    /**
-     * Enqueue a share Request and notify the sender manager.
-     */
-    public void handleShareRequest(Request req) {
-        if (req == null) return;
-        enqueueRequest(req);
-    }
-
-    /**
-     * Process a received (decrypted) transaction payload.
-     * Expects payload either as JSON with transaction fields, or as plain text.
-     *
-     * Example JSON:
-     * {
-     *   "id": 123,
-     *   "timestamp": 1610000000000,
-     *   "seller": "Alice",
-     *   "buyer": "Bob",
-     *   "product": "Widget",
-     *   "units": 10,
-     *   "amount": 1000
-     * }
-     *
-     * If JSON parsing fails the method will attempt a fallback behavior (log / store placeholder).
-     */
-    public void handleReceiveTransaction(byte[] decryptedPayload) {
-        if (decryptedPayload == null) {
-            throw new IllegalArgumentException("handleReceiveTransaction: null payload");
-        }
-        String payloadText = new String(decryptedPayload);
-
-        JsonNode root = tryParseJson(payloadText);
-        // Require all fields: id, timestamp, seller, buyer, product, units, amount
-        if (root == null
-            || !root.hasNonNull("id")
-            || !root.hasNonNull("timestamp")
-            || !root.hasNonNull("seller")
-            || !root.hasNonNull("buyer")
-            || !root.hasNonNull("product")
-            || !root.hasNonNull("units")
-            || !root.hasNonNull("amount")
-            || !root.get("id").canConvertToLong()
-            || !root.get("timestamp").canConvertToLong()
-            || !root.get("units").canConvertToLong()
-            || !root.get("amount").canConvertToLong()) {
-            throw new IllegalArgumentException("handleReceiveTransaction: payload not JSON or missing required fields. payload=" + payloadText);
-        }
-        long parsedId = root.get("id").asLong();
-        long timestamp = root.get("timestamp").asLong();
-        String seller = root.get("seller").asText();
-        String buyer = root.get("buyer").asText();
-        String product = root.get("product").asText();
-        long units = root.get("units").asLong();
-        long amount = root.get("amount").asLong();
-
+    public byte[] processRequest(byte[] request) {
         try {
-            DatabaseOperations.insertTransaction(parsedId, timestamp, seller, buyer, product, units, amount);
-            System.out.println("handleReceiveTransaction: stored transaction id=" + parsedId);
+            String requestStr = new String(request, java.nio.charset.StandardCharsets.UTF_8);
+            System.out.println("Processing request: " + requestStr.substring(0, Math.min(200, requestStr.length())));
+            
+            // Extract request type from format: {request_type: transaction, ...}
+            String requestType = extractField(requestStr, "request_type");
+            
+            if (requestType == null) {
+                return errorResponse("Invalid request format - missing request_type");
+            }
+            
+            switch (requestType) {
+                case "transaction":
+                    return handleTransactionRequest(requestStr, request);
+                case "share":
+                    return handleShareRequest(requestStr);
+                case "getById":
+                    return handleGetByIdRequest(requestStr);
+                case "getAll":
+                    return handleGetAllRequest(requestStr);
+                case "getShares":
+                    return handleGetSharesRequest(requestStr);
+                case "getSharesBy":
+                    return handleGetSharesByRequest(requestStr);
+                default:
+                    return errorResponse("Unknown request type: " + requestType);
+            }
+        } catch (Exception e) {
+            System.err.println("Error processing request: " + e.getMessage());
+            e.printStackTrace();
+            return errorResponse("Server error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle transaction submission from client with signatures (SR3).
+     * Format: {request_type: transaction, source: ClientName}[JSON_DATA]{seller_sig:...}{buyer_sig:...}
+     */
+    private byte[] handleTransactionRequest(String requestStr, byte[] fullRequest) {
+        try {
+            // Extract source (who's submitting)
+            String source = extractField(requestStr, "source");
+            if (source == null) {
+                return errorResponse("Missing source field");
+            }
+            
+            // Find where the metadata ends and JSON transaction data begins
+            int jsonStart = requestStr.indexOf("}") + 1;
+            if (jsonStart >= fullRequest.length) {
+                return errorResponse("No transaction data provided");
+            }
+            
+            // Extract the full payload after metadata
+            String payload = new String(fullRequest, jsonStart, fullRequest.length - jsonStart, 
+                java.nio.charset.StandardCharsets.UTF_8);
+            
+            // Split payload into: transaction JSON, seller_signature, buyer_signature
+            // Format: {...transaction...}{seller_sig:BASE64}{buyer_sig:BASE64}
+            int sigStart = payload.lastIndexOf("}{seller_sig:");
+            if (sigStart == -1) {
+                return errorResponse("Missing seller signature");
+            }
+            String transactionJson = payload.substring(0, sigStart + 1);
+            String sigPart = payload.substring(sigStart + 1);
+            
+            String sellerSig = extractField(sigPart, "seller_sig");
+            String buyerSig = extractField(sigPart, "buyer_sig");
+            
+            if (sellerSig == null || buyerSig == null) {
+                return errorResponse("Missing transaction signatures");
+            }
+            
+            // Parse transaction fields
+            long id = extractLongField(transactionJson, "id");
+            long timestamp = extractLongField(transactionJson, "timestamp");
+            String seller = extractField(transactionJson, "seller");
+            String buyer = extractField(transactionJson, "buyer");
+            String product = extractField(transactionJson, "product");
+            long units = extractLongField(transactionJson, "units");
+            long amount = extractLongField(transactionJson, "amount");
+            
+            if (seller == null || buyer == null || product == null) {
+                return errorResponse("Missing required transaction fields");
+            }
+            
+            // SR2: Only seller or buyer can submit transaction
+            if (!source.equals(seller) && !source.equals(buyer)) {
+                return errorResponse("Access denied: only seller or buyer can submit transaction");
+            }
+            
+            // SR3: Verify signatures
+            byte[] transactionBytes = transactionJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            PublicKey sellerPubKey = getCompanyPublicKey(seller);
+            PublicKey buyerPubKey = getCompanyPublicKey(buyer);
+            
+            if (!CryptoUtils.verifySignature(transactionBytes, sellerSig, sellerPubKey)) {
+                return errorResponse("Invalid seller signature");
+            }
+            if (!CryptoUtils.verifySignature(transactionBytes, buyerSig, buyerPubKey)) {
+                return errorResponse("Invalid buyer signature");
+            }
+            
+            System.out.println("Storing transaction: id=" + id + ", seller=" + seller + ", buyer=" + buyer);
+            
+            // SR1: Encrypt transaction before storing
+            byte[] encryptedData = CryptoUtils.encrypt(transactionBytes, storageKey);
+            String encryptedB64 = Base64.getEncoder().encodeToString(encryptedData);
+            
+            // Store in database with signatures
+            DatabaseOperations.insertTransaction(id, timestamp, seller, buyer, product, units, amount,
+                                                  sellerSig, buyerSig, encryptedB64);
+            
+            // SR4: Add initial shares with server signature
+            long shareTime = System.currentTimeMillis();
+            String shareData = String.format("%d:%s:server", id, seller);
+            String sellerShareSig = CryptoUtils.signData(shareData.getBytes(), serverPrivateKey);
+            DatabaseOperations.addShare(id, seller, "server", shareTime, sellerShareSig);
+            
+            shareData = String.format("%d:%s:server", id, buyer);
+            String buyerShareSig = CryptoUtils.signData(shareData.getBytes(), serverPrivateKey);
+            DatabaseOperations.addShare(id, buyer, "server", shareTime, buyerShareSig);
+            
+            return successResponse("Transaction stored successfully with id=" + id);
+            
         } catch (SQLException e) {
-            System.err.println("handleReceiveTransaction: DB insert failed: " + e.getMessage());
+            return errorResponse("Database error: " + e.getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return errorResponse("Transaction processing error: " + e.getMessage());
         }
     }
     
-
     /**
-     * Process a received (decrypted) share payload.
-     * Expects format:
-     *   senderName|transactionId|receiverName
-     * Example:
-     *   Alice|123|Bob
-     *
-     * The payload must be a single string with sender name, transaction id, and receiver name separated by '|'.
+     * Handle share transaction with another party (SR2, SR4).
+     * Format: {request_type:share, source:CompanyName, transaction_id:123, share_with:OtherCompany}{signature:BASE64}
      */
-    public void handleReceiveShare(byte[] decryptedPayload) {
-        if (decryptedPayload == null) {
-            System.err.println("handleReceiveShare: null payload");
-            return;
-        }
-        String payloadText = new String(decryptedPayload);
-
-        // Expect format: senderName|transactionId|receiverName
-        String[] parts = payloadText.split("\\|", 3);
-        if (parts.length == 3) {
-            String senderName = parts[0].trim();
-            long transactionId;
-            try {
-                transactionId = Long.parseLong(parts[1].trim());
-            } catch (NumberFormatException e) {
-                System.err.println("handleReceiveShare: invalid transactionId in payload: " + payloadText);
-                return;
-            }
-            // receiverName = parts[2].trim(); // Not used in DB
-            try {
-                DatabaseOperations.addShare(transactionId, payloadText, senderName);
-                System.out.println("handleReceiveShare: added share (string format) to transaction id=" + transactionId);
-            } catch (SQLException e) {
-                System.err.println("handleReceiveShare: DB addShare failed: " + e.getMessage());
-            }
-        } else {
-            System.err.println("handleReceiveShare: payload not in 'sender|id|receiver' format. payload=" + payloadText);
-        }
-    }
-
-    // -------------------------
-    // Helper methods
-    // -------------------------
-
-    /**
-     * Enqueue and notify sender manager.
-     */
-    private void enqueueRequest(Request req) {
+    private byte[] handleShareRequest(String requestStr) {
         try {
-            sendQueue.put(req); // blocks only if queue bounded and full; LinkedBlockingQueue default is unbounded
-            // Notify the senderManager waiting on sendLock
-            synchronized (sendLock) {
-                sendLock.notifyAll();
+            String source = extractField(requestStr, "source");
+            long id = extractLongField(requestStr, "transaction_id");
+            String shareWith = extractField(requestStr, "share_with");
+            String signature = extractField(requestStr, "signature");
+            
+            if (source == null || shareWith == null || signature == null) {
+                return errorResponse("Missing required share parameters");
             }
-            System.out.println("Enqueued request for host=" + req.getHost() + ":" + req.getPort() + " type=" + req.getType());
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            System.err.println("enqueueRequest interrupted: " + ie.getMessage());
+            
+            // Get transaction to verify access
+            DatabaseOperations.TransactionRecord rec = DatabaseOperations.getTransactionById(id);
+            if (rec == null) {
+                return errorResponse("Transaction not found");
+            }
+            
+            // SR2: Only seller or buyer can share
+            if (!source.equals(rec.seller) && !source.equals(rec.buyer)) {
+                return errorResponse("Access denied: only seller or buyer can share this transaction");
+            }
+            
+            // Verify signature on share request
+            String shareData = String.format("%d:%s:%s", id, shareWith, source);
+            PublicKey sourcePubKey = getCompanyPublicKey(source);
+            if (!CryptoUtils.verifySignature(shareData.getBytes(), signature, sourcePubKey)) {
+                return errorResponse("Invalid share signature");
+            }
+            
+            // SR4: Add share with cryptographic proof
+            long shareTime = System.currentTimeMillis();
+            DatabaseOperations.addShare(id, shareWith, source, shareTime, signature);
+            
+            return successResponse("Transaction shared with " + shareWith);
+            
+        } catch (SQLException e) {
+            return errorResponse("Database error: " + e.getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return errorResponse("Share error: " + e.getMessage());
         }
     }
 
     /**
-     * Try parse JSON and return JsonNode, or null if parsing fails.
+     * Handle get transaction by ID request with access control (SR1).
+     * Format: {request_type:getById, source: ClientName, transaction_id: 123}
      */
-    private JsonNode tryParseJson(String text) {
-        if (text == null || text.isEmpty()) return null;
+    private byte[] handleGetByIdRequest(String requestStr) {
         try {
-            return objectMapper.readTree(text);
-        } catch (IOException e) {
-            return null;
+            String source = extractField(requestStr, "source");
+            if (source == null) source = extractField(requestStr, "servername"); // fallback
+            
+            long id = extractLongField(requestStr, "trasaction_id"); // Note: typo in client code
+            if (id == 0) {
+                id = extractLongField(requestStr, "transaction_id");
+            }
+            
+            DatabaseOperations.TransactionRecord rec = DatabaseOperations.getTransactionById(id);
+            if (rec == null) {
+                return errorResponse("Transaction not found: " + id);
+            }
+            
+            // SR1: Check if requester has access (must be seller, buyer, or someone it was shared with)
+            List<String> shares = DatabaseOperations.getShares(id);
+            if (!shares.contains(source)) {
+                return errorResponse("Access denied: transaction not shared with you");
+            }
+            
+            // Return transaction with signatures for verification (SR3)
+            String json = String.format(
+                "{\"id\":%d,\"timestamp\":%d,\"seller\":\"%s\",\"buyer\":\"%s\",\"product\":\"%s\",\"units\":%d,\"amount\":%d,\"seller_signature\":\"%s\",\"buyer_signature\":\"%s\"}",
+                rec.id, rec.timestamp, rec.seller, rec.buyer, rec.product, rec.units, rec.amount, rec.sellerSignature, rec.buyerSignature
+            );
+            
+            return json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            
+        } catch (SQLException e) {
+            return errorResponse("Database error: " + e.getMessage());
+        } catch (Exception e) {
+            return errorResponse("Get by ID error: " + e.getMessage());
         }
     }
 
+    /**
+     * Handle get all transactions request with access control (SR1).
+     * Format: {request_type:getAll, source: ClientName}
+     */
+    private byte[] handleGetAllRequest(String requestStr) {
+        try {
+            String source = extractField(requestStr, "source");
+            if (source == null) source = extractField(requestStr, "servername"); // fallback
+            
+            List<DatabaseOperations.TransactionRecord> allRecords = DatabaseOperations.getAllTransactions();
+            
+            StringBuilder json = new StringBuilder("{\"transactions\":[");
+            boolean first = true;
+            for (DatabaseOperations.TransactionRecord rec : allRecords) {
+                // SR1: Only return transactions that were shared with this source
+                List<String> shares = DatabaseOperations.getShares(rec.id);
+                if (shares.contains(source)) {
+                    if (!first) json.append(",");
+                    first = false;
+                    json.append(String.format(
+                        "{\"id\":%d,\"timestamp\":%d,\"seller\":\"%s\",\"buyer\":\"%s\",\"product\":\"%s\",\"units\":%d,\"amount\":%d,\"seller_signature\":\"%s\",\"buyer_signature\":\"%s\"}",
+                        rec.id, rec.timestamp, rec.seller, rec.buyer, rec.product, rec.units, rec.amount, rec.sellerSignature, rec.buyerSignature
+                    ));
+                }
+            }
+            json.append("]}");
+            
+            return json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            
+        } catch (SQLException e) {
+            return errorResponse("Database error: " + e.getMessage());
+        } catch (Exception e) {
+            return errorResponse("Get all error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle get shares for transaction request with cryptographic proofs (SR4).
+     * Format: {request_type:getShares, source: ClientName, transaction_id: 123}
+     */
+    private byte[] handleGetSharesRequest(String requestStr) {
+        try {
+            long id = extractLongField(requestStr, "transaction_id");
+            String source = extractField(requestStr, "source");
+            if (source == null) source = extractField(requestStr, "servername"); // fallback
+            
+            // SR1: Check access
+            DatabaseOperations.TransactionRecord rec = DatabaseOperations.getTransactionById(id);
+            if (rec == null) {
+                return errorResponse("Transaction not found");
+            }
+            List<String> shares = DatabaseOperations.getShares(id);
+            if (!shares.contains(source)) {
+                return errorResponse("Access denied: transaction not shared with you");
+            }
+            
+            // SR4: Return share records with cryptographic proof
+            List<DatabaseOperations.ShareRecord> shareRecords = DatabaseOperations.getShareRecords(id);
+            
+            StringBuilder json = new StringBuilder("{\"shares\":[");
+            for (int i = 0; i < shareRecords.size(); i++) {
+                if (i > 0) json.append(",");
+                DatabaseOperations.ShareRecord sr = shareRecords.get(i);
+                json.append(String.format(
+                    "{\"company\":\"%s\",\"shared_by\":\"%s\",\"timestamp\":%d,\"signature\":\"%s\"}",
+                    sr.share, sr.sharedBy, sr.timestamp, sr.signature
+                ));
+            }
+            json.append("]}");
+            
+            return json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            
+        } catch (SQLException e) {
+            return errorResponse("Database error: " + e.getMessage());
+        } catch (Exception e) {
+            return errorResponse("Get shares error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle get shares by sharedBy request with cryptographic proofs (SR4).
+     * Format: {request_type:getSharesBy, source: ClientName, transaction_id: 123, shared_by: CompanyName}
+     */
+    private byte[] handleGetSharesByRequest(String requestStr) {
+        try {
+            long id = extractLongField(requestStr, "transaction_id");
+            String sharedBy = extractField(requestStr, "shared_by");
+            String source = extractField(requestStr, "source");
+            if (source == null) source = extractField(requestStr, "servername"); // fallback
+            
+            if (sharedBy == null) {
+                return errorResponse("Missing shared_by parameter");
+            }
+            
+            // SR1: Check access
+            List<String> shares = DatabaseOperations.getShares(id);
+            if (!shares.contains(source)) {
+                return errorResponse("Access denied: transaction not shared with you");
+            }
+            
+            // SR4: Return share records with cryptographic proof
+            List<DatabaseOperations.ShareRecord> shareRecords = DatabaseOperations.getShareRecordsBySharedBy(id, sharedBy);
+            
+            StringBuilder json = new StringBuilder("{\"shares\":[");
+            for (int i = 0; i < shareRecords.size(); i++) {
+                if (i > 0) json.append(",");
+                DatabaseOperations.ShareRecord sr = shareRecords.get(i);
+                json.append(String.format(
+                    "{\"company\":\"%s\",\"shared_by\":\"%s\",\"timestamp\":%d,\"signature\":\"%s\"}",
+                    sr.share, sr.sharedBy, sr.timestamp, sr.signature
+                ));
+            }
+            json.append("]}");
+            
+            return json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            
+        } catch (SQLException e) {
+            return errorResponse("Database error: " + e.getMessage());
+        } catch (Exception e) {
+            return errorResponse("Get shares by error: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Helper: Load public key for a company.
+     */
+    private PublicKey getCompanyPublicKey(String companyName) throws Exception {
+        DatabaseOperations.CompanyInfo info = DatabaseOperations.getCompanyInfo(companyName);
+        if (info == null) {
+            throw new IllegalArgumentException("Unknown company: " + companyName);
+        }
+        return CryptoUtils.loadPublicKey(info.publicKey);
+    }
+
+    // Helper methods for simple string parsing
+    private String extractField(String str, String fieldName) {
+        String pattern = fieldName + ":";
+        int start = str.indexOf(pattern);
+        if (start == -1) return null;
+        start += pattern.length();
+        
+        // Skip whitespace and quotes
+        while (start < str.length() && (str.charAt(start) == ' ' || str.charAt(start) == '"')) start++;
+        
+        // Find end (comma, brace, or quote)
+        int end = start;
+        boolean inQuotes = false;
+        while (end < str.length()) {
+            char c = str.charAt(end);
+            if (c == '"') inQuotes = !inQuotes;
+            else if (!inQuotes && (c == ',' || c == '}')) break;
+            end++;
+        }
+        
+        String value = str.substring(start, end).trim();
+        // Remove quotes if present
+        if (value.startsWith("\"") && value.endsWith("\"")) {
+            value = value.substring(1, value.length() - 1);
+        }
+        return value.isEmpty() ? null : value;
+    }
+
+    private long extractLongField(String str, String fieldName) {
+        String value = extractField(str, fieldName);
+        if (value == null) return 0;
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private byte[] errorResponse(String message) {
+        String json = "{\"error\":\"" + message.replace("\"", "\\\"") + "\"}";
+        return json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private byte[] successResponse(String message) {
+        String json = "{\"success\":true,\"message\":\"" + message.replace("\"", "\\\"") + "\"}";
+        return json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
 }

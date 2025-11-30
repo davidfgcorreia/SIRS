@@ -385,7 +385,62 @@ public class CryptoUtils {
         return new SecretKeySpec(keyBytes, algorithm);
     }
     
-
+    // ---- RSA Signature and Key Loading ----
     
+    /**
+     * Signs data with RSA private key using SHA256withRSA.
+     * Returns base64-encoded signature.
+     */
+    public static String signData(byte[] data, java.security.PrivateKey privateKey) throws Exception {
+        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+        sig.initSign(privateKey);
+        sig.update(data);
+        byte[] signature = sig.sign();
+        return Base64.getEncoder().encodeToString(signature);
+    }
+    
+    /**
+     * Verifies RSA signature with public key.
+     * @param data The original data that was signed
+     * @param signatureB64 The base64-encoded signature
+     * @param publicKey The public key to verify with
+     * @return true if signature is valid
+     */
+    public static boolean verifySignature(byte[] data, String signatureB64, java.security.PublicKey publicKey) throws Exception {
+        byte[] signature = Base64.getDecoder().decode(signatureB64);
+        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+        sig.initVerify(publicKey);
+        sig.update(data);
+        return sig.verify(signature);
+    }
+    
+    /**
+     * Loads a private key from a file (PKCS8 format).
+     */
+    public static java.security.PrivateKey loadPrivateKey(String filePath) throws Exception {
+        byte[] keyBytes = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(filePath));
+        java.security.spec.PKCS8EncodedKeySpec spec = new java.security.spec.PKCS8EncodedKeySpec(keyBytes);
+        java.security.KeyFactory kf = java.security.KeyFactory.getInstance("RSA");
+        return kf.generatePrivate(spec);
+    }
+    
+    /**
+     * Loads a public key from a file (X509 format).
+     */
+    public static java.security.PublicKey loadPublicKey(String filePath) throws Exception {
+        byte[] keyBytes = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(filePath));
+        java.security.spec.X509EncodedKeySpec spec = new java.security.spec.X509EncodedKeySpec(keyBytes);
+        java.security.KeyFactory kf = java.security.KeyFactory.getInstance("RSA");
+        return kf.generatePublic(spec);
+    }
+    
+    /**
+     * Loads a public key from bytes (X509 format).
+     */
+    public static java.security.PublicKey loadPublicKeyFromBytes(byte[] keyBytes) throws Exception {
+        java.security.spec.X509EncodedKeySpec spec = new java.security.spec.X509EncodedKeySpec(keyBytes);
+        java.security.KeyFactory kf = java.security.KeyFactory.getInstance("RSA");
+        return kf.generatePublic(spec);
+    }
     
 }
