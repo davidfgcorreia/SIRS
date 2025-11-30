@@ -3,9 +3,12 @@ package com.chainofproduct.db;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 
+import com.chainofproduct.db.DatabaseOperations.DestinationInfo;
+import com.chainofproduct.db.DatabaseOperations.TransactionRecord;
 import com.chainofproduct.utils.ApiCalls.ServerExecutor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.List;
 
 public class ServerExecutorImpl implements ServerExecutor {
 
@@ -61,6 +64,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
         response = "New transaction inserted in database!"; // FIXME: should it be no response?
         return response.getBytes(StandardCharsets.UTF_8);
+
       case 1:
         transactionId = json.get("transactionId").asInt();
         share = json.get("share").asText();
@@ -72,55 +76,67 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
         response = "New share inserted in database!";
         return response.getBytes(StandardCharsets.UTF_8);
+
       case 2:
         transactionId = json.get("transactionId").asInt();
         try {
-          DatabaseOperations.getShares(transactionId);
+          List<String> shares = DatabaseOperations.getShares(transactionId);
+          return mapper.writeValueAsBytes(shares);
         } catch (SQLException e) {
           // do smoething
         }
-        response = "New Transaction Inserted in database!";
-        return response.getBytes(StandardCharsets.UTF_8);
+        break;
+
       case 3:
         transactionId = json.get("transactionId").asInt();
         sharedBy = json.get("sharedBy").asText();
         try {
-          DatabaseOperations.getSharesBySharedBy(transactionId, sharedBy);
+          List<String> shares = DatabaseOperations.getSharesBySharedBy(transactionId, sharedBy);
+          return mapper.writeValueAsBytes(shares);
         } catch (SQLException e) {
           // do something
         }
         break;
+
       case 4:
         try {
-          DatabaseOperations.getAllTransactions();
+          List<TransactionRecord> transactions = DatabaseOperations.getAllTransactions();
+          return mapper.writeValueAsBytes(transactions);
         } catch (SQLException e) {
           // do something
         }
         break;
+
       case 5:
         id = json.get("id").asInt();
         try {
-          DatabaseOperations.getTransactionById(id);
+          TransactionRecord transactions = DatabaseOperations.getTransactionById(id);
+          return mapper.writeValueAsBytes(transactions);
         } catch (SQLException e) {
           // do something
         }
         break;
+
       case 6:
         companyName = json.get("companyName").asText();
         try {
-          DatabaseOperations.getDestinationInfo(companyName);
+          DestinationInfo destination = DatabaseOperations.getDestinationInfo(companyName);
+          return mapper.writeValueAsBytes(destination);
         } catch (SQLException e) {
           // do something
         }
         break;
+
       case 7:
         companyName = json.get("companyName").asText();
         try {
-          DatabaseOperations.getDestinationInfo(companyName);
+          DestinationInfo destination = DatabaseOperations.getDestinationInfo(companyName);
+          return mapper.writeValueAsBytes(destination);
         } catch (SQLException e) {
           // do something
         }
         break;
+
       case 8:
         companyName = json.get("companyName").asText();
         ip = json.get("ip").asText();
@@ -133,6 +149,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
         response = "New destination inserted in database!";
         return response.getBytes(StandardCharsets.UTF_8);
+
       default:
         // unrecognizable command (sql)
         break;

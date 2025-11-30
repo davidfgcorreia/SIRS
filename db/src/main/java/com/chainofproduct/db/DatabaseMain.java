@@ -2,7 +2,6 @@ package com.chainofproduct.db;
 
 import java.io.IOException;
 import java.net.*;
-import java.util.concurrent.*;
 import com.chainofproduct.utils.ApiCalls;
 
 public class DatabaseMain {
