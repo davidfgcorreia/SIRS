@@ -6,7 +6,8 @@ public class ClientMain {
             System.err.println("Usage: java ClientMain <companyName>");
             System.exit(1);
         }
-        String companyName = args[0];
+        // Join all args with space to handle company names with spaces
+        String companyName = String.join(" ", args);
 
         // Shared queue and lock for sending requests (if needed)
         java.util.concurrent.BlockingQueue<com.chainofproduct.utils.Request> sendQueue = new java.util.concurrent.LinkedBlockingQueue<>();

@@ -22,6 +22,9 @@ public class ClientOperations {
         // demo keys location convention
         this.privKeyFile = "keys/" + clientName.toLowerCase().replace(" ", "-") + "-private.key";
         this.pubKeyFile = "keys/" + clientName.toLowerCase().replace(" ", "-") + "-public.key";
+        
+        // Auto-generate keys if they don't exist
+        ensureKeysExist(clientName);
 
         // Load server info from localizationinfo/serverinfo.json
         String pubKeyFile = null;
@@ -47,29 +50,50 @@ public class ClientOperations {
     
     // Enqueue a transaction send request (Type 1)
     public void sendtrsaction(String dataFile, String destination) {
-        String payload = "{request_type: transaction, source: " + this.clientName + ", destination: " + destination + "}";
-        byte[] fileBytes = null;
         try {
+            // Read transaction JSON file
             java.nio.file.Path path = java.nio.file.Paths.get(dataFile);
-            fileBytes = java.nio.file.Files.readAllBytes(path);
+            byte[] fileBytes = java.nio.file.Files.readAllBytes(path);
+            
+            // Sign the transaction JSON with client's private key
+            java.security.PrivateKey privateKey = com.chainofproduct.utils.CryptoUtils.loadPrivateKey(this.privKeyFile);
+            java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+            sig.initSign(privateKey);
+            sig.update(fileBytes);
+            byte[] signature = sig.sign();
+            String signatureB64 = java.util.Base64.getEncoder().encodeToString(signature);
+            
+            // Create signature JSON: {signature:BASE64} (no quotes around field name)
+            String signatureJson = "{signature:" + signatureB64 + "}";
+            byte[] signatureBytes = signatureJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            
+            // Build payload: metadata + transaction JSON + signature JSON
+            String metadata = "{request_type: transaction, source: \"" + this.clientName + "\", destination: " + destination + "}";
+            byte[] metadataBytes = metadata.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            
+            System.out.println("DEBUG CLIENT: clientName='" + this.clientName + "'");
+            System.out.println("DEBUG CLIENT: metadata='" + metadata + "'");
+            
+            // Combine: metadata + fileBytes + signatureBytes
+            byte[] combined = new byte[metadataBytes.length + fileBytes.length + signatureBytes.length];
+            System.arraycopy(metadataBytes, 0, combined, 0, metadataBytes.length);
+            System.arraycopy(fileBytes, 0, combined, metadataBytes.length, fileBytes.length);
+            System.arraycopy(signatureBytes, 0, combined, metadataBytes.length + fileBytes.length, signatureBytes.length);
+            
+            Request req = new Request(
+                this.serverHost,
+                this.serverPort,
+                this.privKeyFile,
+                this.pubKeyFile,
+                this.serverPubKeyFile,
+                combined
+            );
+            enqueueRequest(req);
+            System.out.println("Enqueued transaction send request for " + destination + " (signed)");
         } catch (Exception e) {
-            System.err.println("Failed to read dataFile as bytes: " + e.getMessage());
-            return;
+            System.err.println("Failed to prepare transaction: " + e.getMessage());
+            e.printStackTrace();
         }
-        byte[] payloadBytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] combined = new byte[payloadBytes.length + fileBytes.length];
-        System.arraycopy(payloadBytes, 0, combined, 0, payloadBytes.length);
-        System.arraycopy(fileBytes, 0, combined, payloadBytes.length, fileBytes.length);
-        Request req = new Request(
-            this.serverHost,
-            this.serverPort,
-            this.privKeyFile,
-            this.pubKeyFile,
-            this.serverPubKeyFile,
-            combined
-        );
-        enqueueRequest(req);
-        System.out.println("Enqueued transaction send request for " + destination);
     }
 
     // Enqueue a getById request (Type 3)
@@ -255,5 +279,52 @@ public class ClientOperations {
         if (start == -1 || end == -1) return null;
         return json.substring(start + 1, end);
     }  
+    
+    /**
+     * Ensures RSA keypair exists for this client, generating if necessary.
+     * This allows clients to automatically generate keys on first run.
+     */
+    private void ensureKeysExist(String entityName) {
+        java.io.File privateKeyFile = new java.io.File(this.privKeyFile);
+        java.io.File publicKeyFile = new java.io.File(this.pubKeyFile);
+        
+        if (privateKeyFile.exists() && publicKeyFile.exists()) {
+            // Keys already exist
+            return;
+        }
+        
+        System.out.println("Keys not found for '" + entityName + "'. Generating new RSA-2048 keypair...");
+        
+        try {
+            // Generate keypair using Java KeyPairGenerator
+            java.security.KeyPairGenerator keyGen = java.security.KeyPairGenerator.getInstance("RSA");
+            keyGen.initialize(2048);
+            java.security.KeyPair keyPair = keyGen.generateKeyPair();
+            
+            // Create keys directory if it doesn't exist
+            privateKeyFile.getParentFile().mkdirs();
+            
+            // Save private key in PKCS#8 DER format
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(privateKeyFile)) {
+                fos.write(keyPair.getPrivate().getEncoded());
+            }
+            
+            // Save public key in X.509 DER format
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(publicKeyFile)) {
+                fos.write(keyPair.getPublic().getEncoded());
+            }
+            
+            // Set permissions
+            privateKeyFile.setReadable(true, true);
+            privateKeyFile.setWritable(true, true);
+            publicKeyFile.setReadable(true, false);
+            
+            System.out.println("✓ Keys generated successfully for '" + entityName + "'");
+        } catch (Exception e) {
+            System.err.println("ERROR: Failed to generate keys for '" + entityName + "': " + e.getMessage());
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
 
 }

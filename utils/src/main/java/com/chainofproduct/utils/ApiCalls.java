@@ -58,10 +58,10 @@ public class ApiCalls {
             out.writeInt(encryptedData.length);
             out.write(encryptedData);
             out.flush();
-            // --- 5. Wait for server response: could be TERMINATE or query result ---
+            // --- 5. Wait for server response: could be TERMINATE or encrypted data ---
             String serverMsg = in.readUTF();
             if ("TERMINATE".equals(serverMsg)) {
-                // Server wants to end connection
+                // Server wants to end connection (no response data)
                 out.writeUTF("ACK");
                 out.flush();
                 String terminateAck = in.readUTF();
@@ -69,16 +69,29 @@ public class ApiCalls {
                     System.out.println("Session terminated by server.");
                 }
                 return null;
-            } else {
-                // Assume this is the query result (could be binary or string)
-                // If you expect binary, adapt this logic
-                result = serverMsg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                out.writeUTF("ACK");
-                out.flush();
-                String terminateAck = in.readUTF();
-                if ("TERMINATE_ACK".equals(terminateAck)) {
-                    System.out.println("Session terminated after query.");
-                }
+            } else if ("ERROR:".equals(serverMsg.substring(0, Math.min(6, serverMsg.length())))) {
+                // Server sent error message
+                System.err.println("Server error: " + serverMsg);
+                return null;
+            }
+            
+            // Server has data - read encrypted response
+            int respLen = in.readInt();
+            byte[] encryptedResponse = new byte[respLen];
+            in.readFully(encryptedResponse);
+            byte[] decryptedResponse = CryptoUtils.decrypt(encryptedResponse, aesKey, 5 * 60 * 1000);
+            if (decryptedResponse == null) {
+                System.err.println("Failed to decrypt server response");
+                return null;
+            }
+            result = decryptedResponse;
+            
+            // Send ACK and wait for termination
+            out.writeUTF("ACK");
+            out.flush();
+            String terminateAck = in.readUTF();
+            if ("TERMINATE_ACK".equals(terminateAck)) {
+                System.out.println("Session terminated after receiving response.");
             }
         }
         return result;
@@ -161,7 +174,9 @@ public class ApiCalls {
                 }
                 return;
             } else {
-                // Encrypt and send response
+                // Signal that we have data, then encrypt and send response
+                out.writeUTF("DATA");
+                out.flush();
                 byte[] encryptedResponse = CryptoUtils.encrypt(response, aesKey);
                 out.writeInt(encryptedResponse.length);
                 out.write(encryptedResponse);
