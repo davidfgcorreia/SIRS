@@ -21,6 +21,9 @@ public class ServerExecutorImpl implements ServerExecutor {
    * in this case, 0 is the first one in DatabaseOperation, incrementing by order
    * of functions
    * that appear there.
+   * Receives decrypted request bytes~, we can see that in handleClient function
+   * 
+   * I think that case 6 and 7 are equal!
    */
   @Override
   public byte[] execute(byte[] request) throws Exception {
@@ -49,7 +52,7 @@ public class ServerExecutorImpl implements ServerExecutor {
     String publicKey;
 
     switch (sql) {
-      case 0:
+      case 0:  // insertTransaction
         id = json.get("id").asInt();
         timestamp = json.get("timestamp").asInt();
         seller = json.get("seller").asText();
@@ -68,7 +71,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         response = "New transaction inserted in database!"; // FIXME: should it be no response?
         return response.getBytes(StandardCharsets.UTF_8);
 
-      case 1:
+      case 1: // addShare
         transactionId = json.get("transactionId").asInt();
         share = json.get("share").asText();
         sharedBy = json.get("sharedBy").asText();
@@ -82,7 +85,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         response = "New share inserted in database!";
         return response.getBytes(StandardCharsets.UTF_8);
 
-      case 2:
+      case 2: // getShares
         transactionId = json.get("transactionId").asInt();
         try {
           List<String> shares = DatabaseOperations.getShares(transactionId);
@@ -92,7 +95,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
         break;
 
-      case 3:
+      case 3: // getSharesBySharedBy
         transactionId = json.get("transactionId").asInt();
         sharedBy = json.get("sharedBy").asText();
         try {
@@ -103,7 +106,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
         break;
 
-      case 4:
+      case 4: // getAllTransactions
         try {
           List<TransactionRecord> transactions = DatabaseOperations.getAllTransactions();
           return mapper.writeValueAsBytes(transactions);
@@ -112,7 +115,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
         break;
 
-      case 5:
+      case 5: // getTransactionById
         id = json.get("id").asInt();
         try {
           TransactionRecord transactions = DatabaseOperations.getTransactionById(id);
@@ -122,7 +125,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
         break;
 
-      case 6:
+      case 6: // getDestinationInfo
         companyName = json.get("companyName").asText();
         try {
           DestinationInfo destination = DatabaseOperations.getDestinationInfo(companyName);
@@ -132,7 +135,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
         break;
 
-      case 7:
+      case 7: // getDestinationInfo
         companyName = json.get("companyName").asText();
         try {
           DestinationInfo destination = DatabaseOperations.getDestinationInfo(companyName);
@@ -142,7 +145,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
         break;
 
-      case 8:
+      case 8: // addDestination
         companyName = json.get("companyName").asText();
         ip = json.get("ip").asText();
         port = json.get("port").asInt();

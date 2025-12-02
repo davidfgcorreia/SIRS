@@ -163,13 +163,6 @@ public class ClientOperations {
         }
     }
 
-
-    
-
-
-
-
-
     /**
      * Verifies if a received file was not tampered with, using only this client's public key.
      * Determines role (seller/buyer) by parsing the JSON and comparing clientName.
@@ -252,17 +245,15 @@ public class ClientOperations {
         return sig.verify(sigBytes);
     }
 
-            // Helper to extract a string field from a simple JSON object (no nested objects)
+    // Helper to extract a string field from a simple JSON object (no nested objects)
     private String extractJsonStringField(String json, String field) {
-            String key = "\"" + field + "\":";
-            int idx = json.indexOf(key);
-            if (idx == -1) return null;
-            int start = json.indexOf('"', idx + key.length());
-            int end = json.indexOf('"', start + 1);
-            if (start == -1 || end == -1) return null;
-            return json.substring(start + 1, end);
-        }
-
-    
+        String key = "\"" + field + "\":";
+        int idx = json.indexOf(key);
+        if (idx == -1) return null;
+        int start = json.indexOf('"', idx + key.length());
+        int end = json.indexOf('"', start + 1);
+        if (start == -1 || end == -1) return null;
+        return json.substring(start + 1, end);
+    }  
 
 }
