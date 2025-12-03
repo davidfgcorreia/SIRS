@@ -20,14 +20,6 @@ public class ApiCalls {
 
     // Sender logic: initiates handshake, receives session keys, sends encrypted data
     public static byte[] actAsSender(String host, int port, String entityType, int clientNum, String receiverEntity, byte[] dataFile) throws Exception {
-        // Load receiver's public RSA key from PKCS12 truststore-pubkeys
-        String pubKeyTruststorePath = receiverEntity + "-truststore-pubkeys.p12";
-        java.security.KeyStore pubKeyStore = java.security.KeyStore.getInstance("PKCS12");
-        try (FileInputStream pubKeyFis = new FileInputStream(pubKeyTruststorePath)) {
-            pubKeyStore.load(pubKeyFis, "changeit".toCharArray());
-        }
-        java.security.cert.Certificate pubKeyCert = pubKeyStore.getCertificate(receiverEntity + "-pubkey");
-        java.security.PublicKey receiverPubKey = pubKeyCert.getPublicKey();
         // Determine keystore/truststore paths based on entity type
         String alias, keyStorePath, trustStorePath;
         if ("client".equalsIgnoreCase(entityType)) {
@@ -47,6 +39,16 @@ public class ApiCalls {
         }
         String keyStorePassword = "changeit";
         String trustStorePassword = "changeit";
+        String trustStorePubKeys = "changeit";
+
+        // Load receiver's public RSA key from PKCS12 truststore-pubkeys
+        String pubKeyTruststorePath = receiverEntity + "-truststore-pubkeys.p12";
+        java.security.KeyStore pubKeyStore = java.security.KeyStore.getInstance("PKCS12");
+        try (FileInputStream pubKeyFis = new FileInputStream(pubKeyTruststorePath)) {
+            pubKeyStore.load(pubKeyFis, trustStorePubKeys.toCharArray());
+        }
+        java.security.cert.Certificate pubKeyCert = pubKeyStore.getCertificate(receiverEntity + "-pubkey");
+        java.security.PublicKey receiverPubKey = pubKeyCert.getPublicKey();
 
         // Load sender's private and public key from keystore
         java.security.KeyStore keyStore = java.security.KeyStore.getInstance("PKCS12");
@@ -97,7 +99,12 @@ public class ApiCalls {
             out.write(encSessionKey);
             out.flush();
             // 3. Use the session key for all further encrypt/decrypt
-            byte[] encryptedPayload = CryptoUtils.encrypt(dataFile, sessionKey);
+            byte[] encryptedPayload;
+            try {
+                encryptedPayload = CryptoUtils.encrypt(dataFile, sessionKey);
+            } catch (Exception e) {
+                throw new SecurityException("Encryption failed in actAsSender: " + e.getMessage(), e);
+            }
             if (encryptedPayload.length <= 0 || encryptedPayload.length > 10_000_000) throw new IOException("Invalid payload length");
             out.writeInt(encryptedPayload.length);
             out.write(encryptedPayload);
@@ -108,7 +115,12 @@ public class ApiCalls {
             byte[] encryptedResp = new byte[respLen];
             in.readFully(encryptedResp);
             // Decrypt server response
-            String serverMsg = new String(CryptoUtils.decrypt(encryptedResp, sessionKey, 5 * 60 * 1000), java.nio.charset.StandardCharsets.UTF_8);
+            String serverMsg;
+            try {
+                serverMsg = new String(CryptoUtils.decrypt(encryptedResp, sessionKey, 5 * 60 * 1000), java.nio.charset.StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                throw new SecurityException("Decryption failed in actAsSender: " + e.getMessage(), e);
+            }
             if ("TERMINATE".equals(serverMsg)) {
                 out.writeUTF("ACK");
                 out.flush();
@@ -219,11 +231,20 @@ public class ApiCalls {
             if (payloadLen <= 0 || payloadLen > 10_000_000) throw new IOException("Invalid payload length");
             byte[] encryptedPayload = new byte[payloadLen];
             in.readFully(encryptedPayload);
-            byte[] payload = CryptoUtils.decrypt(encryptedPayload, sessionKey, 5 * 60 * 1000);
+            byte[] payload;
+            try {
+                payload = CryptoUtils.decrypt(encryptedPayload, sessionKey, 5 * 60 * 1000);
+            } catch (Exception e) {
+                throw new SecurityException("Decryption failed in handleClient: " + e.getMessage(), e);
+            }
             // Call server executor
             byte[] response = executor.execute(payload);
-            // Encrypt response with session key
-            byte[] encryptedResp = CryptoUtils.encrypt(response == null ? "TERMINATE".getBytes(java.nio.charset.StandardCharsets.UTF_8) : response, sessionKey);
+            byte[] encryptedResp;
+            try {
+                encryptedResp = CryptoUtils.encrypt(response == null ? "TERMINATE".getBytes(java.nio.charset.StandardCharsets.UTF_8) : response, sessionKey);
+            } catch (Exception e) {
+                throw new SecurityException("Encryption failed in handleClient: " + e.getMessage(), e);
+            }
             out.writeInt(encryptedResp.length);
             out.write(encryptedResp);
             out.flush();
