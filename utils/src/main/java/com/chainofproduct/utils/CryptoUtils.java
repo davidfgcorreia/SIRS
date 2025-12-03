@@ -17,7 +17,7 @@ public class CryptoUtils {
     private static final int GCM_TAG_LENGTH = 128;
     private static final int IV_LENGTH = 12;
     private static final byte VERSION = 1; // Protocol version
-    private static final int NONCE_LENGTH = 12; // 96 bits, same as IV for convenience
+    public static final int NONCE_LENGTH = 12; // 96 bits, same as IV for convenience
 
     // Replay protection: track used nonces and their expiration
     private static final java.util.Map<String, Long> usedNonces = new java.util.concurrent.ConcurrentHashMap<>();

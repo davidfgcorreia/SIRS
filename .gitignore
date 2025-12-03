@@ -1,3 +1,7 @@
+*-keystore.p12
+*-truststore.p12
+*-truststore-pubkeys.p12
+keys/
 inputs/
 outputs/
 keys/

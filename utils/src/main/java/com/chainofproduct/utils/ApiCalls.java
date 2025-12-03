@@ -3,83 +3,142 @@ package com.chainofproduct.utils;
 import java.io.*;
 import java.net.*;
 import javax.crypto.SecretKey;
-import java.security.PrivateKey;
-import java.security.PublicKey;
-import java.security.KeyFactory;
-import java.security.spec.PKCS8EncodedKeySpec;
-import java.security.spec.X509EncodedKeySpec;;
 
 public class ApiCalls {
+    // Replay protection for session key exchange
+    private static final java.util.concurrent.ConcurrentMap<String, Long> usedNonces = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.Timer nonceCleanupTimer = new java.util.Timer(true);
+    static {
+        nonceCleanupTimer.schedule(new java.util.TimerTask() {
+            @Override
+            public void run() {
+                long now = System.currentTimeMillis();
+                usedNonces.entrySet().removeIf(e -> e.getValue() < now);
+            }
+        }, 60_000, 60_000); // every 1 minute
+    }
 
-    // Sender logic: initiates handshake, receives session keys, sends encrypted data with HMAC
-    public static byte[] actAsSender(String host, int port, String senderPrivKeyFile, String senderPubKeyFile, String receiverPubKeyFile, byte[] dataFile) throws Exception {
-        // Load sender's private and public key
-        PrivateKey senderPrivateKey = loadPrivateKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(senderPrivKeyFile)));
-        PublicKey senderPublicKey = loadPublicKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(senderPubKeyFile)));
-        // Load receiver's public key
-        PublicKey receiverPublicKey = loadPublicKey(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(receiverPubKeyFile)));
+    // Sender logic: initiates handshake, receives session keys, sends encrypted data
+    public static byte[] actAsSender(String host, int port, String entityType, int clientNum, String receiverEntity, byte[] dataFile) throws Exception {
+        // Load receiver's public RSA key from PKCS12 truststore-pubkeys
+        String pubKeyTruststorePath = receiverEntity + "-truststore-pubkeys.p12";
+        java.security.KeyStore pubKeyStore = java.security.KeyStore.getInstance("PKCS12");
+        try (FileInputStream pubKeyFis = new FileInputStream(pubKeyTruststorePath)) {
+            pubKeyStore.load(pubKeyFis, "changeit".toCharArray());
+        }
+        java.security.cert.Certificate pubKeyCert = pubKeyStore.getCertificate(receiverEntity + "-pubkey");
+        java.security.PublicKey receiverPubKey = pubKeyCert.getPublicKey();
+        // Determine keystore/truststore paths based on entity type
+        String alias, keyStorePath, trustStorePath;
+        if ("client".equalsIgnoreCase(entityType)) {
+            alias = "client" + clientNum;
+            keyStorePath = alias + "-keystore.p12";
+            trustStorePath = alias + "-truststore.p12";
+        } else if ("server".equalsIgnoreCase(entityType)) {
+            alias = "server";
+            keyStorePath = "server-keystore.p12";
+            trustStorePath = "server-truststore.p12";
+        } else if ("db".equalsIgnoreCase(entityType)) {
+            alias = "db";
+            keyStorePath = "db-keystore.p12";
+            trustStorePath = "db-truststore.p12";
+        } else {
+            throw new IllegalArgumentException("Unknown entity type: " + entityType);
+        }
+        String keyStorePassword = "changeit";
+        String trustStorePassword = "changeit";
+
+        // Load sender's private and public key from keystore
+        java.security.KeyStore keyStore = java.security.KeyStore.getInstance("PKCS12");
+        try (FileInputStream keyStoreFis = new FileInputStream(keyStorePath)) {
+            keyStore.load(keyStoreFis, keyStorePassword.toCharArray());
+        }
+        // Load sender's private key from keystore (for TLS mutual auth)
+        // Load truststore (for TLS mutual auth)
+        java.security.KeyStore trustStore = java.security.KeyStore.getInstance("PKCS12");
+        try (FileInputStream trustStoreFis = new FileInputStream(trustStorePath)) {
+            trustStore.load(trustStoreFis, trustStorePassword.toCharArray());
+        }
+
+        javax.net.ssl.KeyManagerFactory kmf = javax.net.ssl.KeyManagerFactory.getInstance("SunX509");
+        kmf.init(keyStore, keyStorePassword.toCharArray());
+        javax.net.ssl.TrustManagerFactory tmf = javax.net.ssl.TrustManagerFactory.getInstance("SunX509");
+        tmf.init(trustStore);
+        javax.net.ssl.SSLContext sslContext = javax.net.ssl.SSLContext.getInstance("TLS");
+        sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), new java.security.SecureRandom());
+        javax.net.ssl.SSLSocketFactory factory = sslContext.getSocketFactory();
 
         byte[] result = null;
-        try (Socket socket = new Socket(host, port)) {
+        try (Socket socket = factory.createSocket(host, port)) {
             DataOutputStream out = new DataOutputStream(socket.getOutputStream());
             DataInputStream in = new DataInputStream(socket.getInputStream());
-            // --- 1. Handshake: send nonce, timestamp, signature, sender's public key ---
-            byte[] nonce = new byte[8];
-            new java.security.SecureRandom().nextBytes(nonce);
-            long timestamp = System.currentTimeMillis();
-            byte[] toSign = new byte[nonce.length + 8];
-            System.arraycopy(nonce, 0, toSign, 0, nonce.length);
-            for (int i = 0; i < 8; i++) toSign[nonce.length + i] = (byte) (timestamp >>> (8 * (7 - i)));
-            byte[] signature = asymmetricSign(toSign, senderPrivateKey);
-            out.write(nonce);
-            out.writeLong(timestamp);
-            out.writeInt(signature.length);
-            out.write(signature);
-            byte[] senderPubBytes = senderPublicKey.getEncoded();
-            out.writeInt(senderPubBytes.length);
-            out.write(senderPubBytes);
-            out.flush();
-            // --- 2. Wait for AUTH_OK ---
-            String authResp = in.readUTF();
-            if (!"AUTH_OK".equals(authResp)) {
-                System.err.println("Authentication failed: " + authResp);
-                return null;
+            if (socket instanceof javax.net.ssl.SSLSocket) {
+                ((javax.net.ssl.SSLSocket) socket).startHandshake();
             }
-            // --- 3. Receive session keys ---
-            int sessLen = in.readInt();
-            byte[] encryptedSessionKeys = new byte[sessLen];
-            in.readFully(encryptedSessionKeys);
-            byte[] sessionKeys = asymmetricDecrypt(encryptedSessionKeys, senderPrivateKey, receiverPublicKey);
-            byte[] aesKeyBytes = new byte[32];
-            System.arraycopy(sessionKeys, 0, aesKeyBytes, 0, 32);
-            SecretKey aesKey = new javax.crypto.spec.SecretKeySpec(aesKeyBytes, "AES");
-            // --- 4. Encrypt and send data ---
-            byte[] encryptedData = CryptoUtils.encrypt(dataFile, aesKey);
-            out.writeInt(encryptedData.length);
-            out.write(encryptedData);
+            // 1. Generate a new random session AES key
+            javax.crypto.KeyGenerator keyGen = javax.crypto.KeyGenerator.getInstance("AES");
+            keyGen.init(256);
+            SecretKey sessionKey = keyGen.generateKey();
+            // 1b. Add timestamp and nonce for replay/freshness protection
+            long timestamp = java.time.Instant.now().toEpochMilli();
+            byte[] nonce = com.chainofproduct.utils.CryptoUtils.generateNonce();
+            byte[] sessionKeyBytes = sessionKey.getEncoded();
+            java.nio.ByteBuffer sessionKeyBuf = java.nio.ByteBuffer.allocate(8 + nonce.length + sessionKeyBytes.length);
+            sessionKeyBuf.putLong(timestamp);
+            sessionKeyBuf.put(nonce);
+            sessionKeyBuf.put(sessionKeyBytes);
+            byte[] sessionKeyWithMeta = sessionKeyBuf.array();
+            // 2. Encrypt the session key+meta with the receiver's public RSA key and send it
+            javax.crypto.Cipher rsaCipher = javax.crypto.Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+            rsaCipher.init(javax.crypto.Cipher.ENCRYPT_MODE, receiverPubKey);
+            byte[] encSessionKey = rsaCipher.doFinal(sessionKeyWithMeta);
+            if (encSessionKey.length <= 0 || encSessionKey.length > 4096) throw new IOException("Invalid session key length");
+            out.writeInt(encSessionKey.length);
+            out.write(encSessionKey);
             out.flush();
-            // --- 5. Wait for server response: could be TERMINATE or query result ---
-            String serverMsg = in.readUTF();
+            // 3. Use the session key for all further encrypt/decrypt
+            byte[] encryptedPayload = CryptoUtils.encrypt(dataFile, sessionKey);
+            if (encryptedPayload.length <= 0 || encryptedPayload.length > 10_000_000) throw new IOException("Invalid payload length");
+            out.writeInt(encryptedPayload.length);
+            out.write(encryptedPayload);
+            out.flush();
+            // Wait for server response (could be TERMINATE or query result)
+            int respLen = in.readInt();
+            if (respLen <= 0 || respLen > 10_000_000) throw new IOException("Invalid response length");
+            byte[] encryptedResp = new byte[respLen];
+            in.readFully(encryptedResp);
+            // Decrypt server response
+            String serverMsg = new String(CryptoUtils.decrypt(encryptedResp, sessionKey, 5 * 60 * 1000), java.nio.charset.StandardCharsets.UTF_8);
             if ("TERMINATE".equals(serverMsg)) {
-                // Server wants to end connection
                 out.writeUTF("ACK");
                 out.flush();
-                String terminateAck = in.readUTF();
+                String terminateAck = null;
+                try {
+                    terminateAck = in.readUTF();
+                } catch (EOFException eof) {
+                    terminateAck = null;
+                }
                 if ("TERMINATE_ACK".equals(terminateAck)) {
                     System.out.println("Session terminated by server.");
                 }
                 return null;
             } else {
-                // Assume this is the query result (could be binary or string)
-                // If you expect binary, adapt this logic
                 result = serverMsg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
                 out.writeUTF("ACK");
                 out.flush();
-                String terminateAck = in.readUTF();
+                String terminateAck = null;
+                try {
+                    terminateAck = in.readUTF();
+                } catch (EOFException eof) {
+                    terminateAck = null;
+                }
                 if ("TERMINATE_ACK".equals(terminateAck)) {
                     System.out.println("Session terminated after query.");
                 }
             }
+        } catch (Exception e) {
+            System.err.println("[SECURITY] Error in actAsSender: " + e.getMessage());
+            throw e;
         }
         return result;
     }
@@ -103,128 +162,91 @@ public class ApiCalls {
      * Sends response or handles session termination protocol.
      */
     public static void handleClient(Socket socket, ServerExecutor executor) throws Exception {
+        // Dynamically determine alias ("server" or "db") based on the certificate subject in the SSLSession
+        String alias = null;
+        if (socket instanceof javax.net.ssl.SSLSocket) {
+            javax.net.ssl.SSLSocket sslSocket = (javax.net.ssl.SSLSocket) socket;
+            sslSocket.startHandshake(); // Explicit handshake for security
+            javax.net.ssl.SSLSession session = sslSocket.getSession();
+            java.security.cert.Certificate[] certs = session.getLocalCertificates();
+            if (certs != null && certs.length > 0 && certs[0] instanceof java.security.cert.X509Certificate) {
+                String subject = ((java.security.cert.X509Certificate) certs[0]).getSubjectX500Principal().getName();
+                if (subject.contains("CN=server")) {
+                    alias = "server";
+                } else if (subject.contains("CN=db")) {
+                    alias = "db";
+                }
+            }
+        }
+        if (alias == null) alias = "server"; // fallback for non-SSL or unknown, default to server
+        String keyStorePath = alias + "-keystore.p12";
+        String keyStorePassword = "changeit";
+        java.security.KeyStore keyStore = java.security.KeyStore.getInstance("PKCS12");
+        try (FileInputStream keyStoreFis = new FileInputStream(keyStorePath)) {
+            keyStore.load(keyStoreFis, keyStorePassword.toCharArray());
+        }
+        java.security.PrivateKey privateKey = (java.security.PrivateKey) keyStore.getKey(alias, keyStorePassword.toCharArray());
         try (DataInputStream in = new DataInputStream(socket.getInputStream());
              DataOutputStream out = new DataOutputStream(socket.getOutputStream())) {
-
-            // --- 1. Handshake: Sender authenticates with signed nonce/timestamp ---
-            byte[] nonce = new byte[8];
-            in.readFully(nonce);
-            long timestamp = in.readLong();
-            int sigLen = in.readInt();
-            byte[] signature = new byte[sigLen];
-            in.readFully(signature);
-            int pubLen = in.readInt();
-            byte[] senderPubBytes = new byte[pubLen];
-            in.readFully(senderPubBytes);
-            PublicKey senderPublicKey = loadPublicKey(senderPubBytes);
-
-            // Verify signature and freshness
-            boolean authOK = verifySignatureAndFreshness(nonce, timestamp, signature, senderPublicKey);
-            if (!authOK) {
-                out.writeUTF("AUTH_FAIL");
-                out.flush();
-                return;
-            }
-            out.writeUTF("AUTH_OK");
-            out.flush();
-
-            // --- 2. Receiver generates session keys and sends them encrypted with sender's public key ---
-            SecretKey aesKey = CryptoUtils.generateAESKey(256);
-            byte[] aesKeyBytes = aesKey.getEncoded();
-            byte[] sessionKeys = aesKeyBytes; // Only AES key needed now
-            byte[] encryptedSessionKeys = asymmetricEncrypt(sessionKeys, senderPublicKey, null);
-            out.writeInt(encryptedSessionKeys.length);
-            out.write(encryptedSessionKeys);
-            out.flush();
-
-            // --- 3. Receive encrypted data ---
+            // 1. Receive the encrypted session key and decrypt it with RSA
+            int encSessionKeyLen = in.readInt();
+            if (encSessionKeyLen <= 0 || encSessionKeyLen > 4096) throw new IOException("Invalid session key length");
+            byte[] encSessionKey = new byte[encSessionKeyLen];
+            in.readFully(encSessionKey);
+            javax.crypto.Cipher rsaCipher = javax.crypto.Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+            rsaCipher.init(javax.crypto.Cipher.DECRYPT_MODE, privateKey);
+            byte[] sessionKeyWithMeta = rsaCipher.doFinal(encSessionKey);
+            // Validate timestamp and nonce for replay/freshness protection
+            if (sessionKeyWithMeta.length < 8 + com.chainofproduct.utils.CryptoUtils.NONCE_LENGTH + 16) throw new SecurityException("Session key meta too short");
+            java.nio.ByteBuffer buf = java.nio.ByteBuffer.wrap(sessionKeyWithMeta);
+            long timestamp = buf.getLong();
+            byte[] nonce = new byte[com.chainofproduct.utils.CryptoUtils.NONCE_LENGTH];
+            buf.get(nonce);
+            byte[] sessionKeyBytes = new byte[sessionKeyWithMeta.length - 8 - com.chainofproduct.utils.CryptoUtils.NONCE_LENGTH];
+            buf.get(sessionKeyBytes);
+            long now = java.time.Instant.now().toEpochMilli();
+            long maxAgeMillis = 5 * 60 * 1000;
+            long clockDrift = 60 * 1000;
+            if (timestamp < 0 || timestamp > now + clockDrift) throw new SecurityException("Session key timestamp invalid");
+            if (now - timestamp > maxAgeMillis) throw new SecurityException("Session key too old");
+            // Replay protection: check and store nonce
+            String nonceKey = java.util.Base64.getEncoder().encodeToString(nonce);
+            Long expires = usedNonces.putIfAbsent(nonceKey, now + maxAgeMillis + clockDrift);
+            if (expires != null) throw new SecurityException("Session key replay detected");
+            SecretKey sessionKey = new javax.crypto.spec.SecretKeySpec(sessionKeyBytes, "AES");
+            // 2. Receive the encrypted payload and decrypt with session key
             int payloadLen = in.readInt();
+            if (payloadLen <= 0 || payloadLen > 10_000_000) throw new IOException("Invalid payload length");
             byte[] encryptedPayload = new byte[payloadLen];
             in.readFully(encryptedPayload);
-            byte[] decryptedPayload = CryptoUtils.decrypt(encryptedPayload, aesKey, 5 * 60 * 1000);
-            if (decryptedPayload == null) {
-                out.writeUTF("ERROR: Decryption failed");
-                out.flush();
-                return;
+            byte[] payload = CryptoUtils.decrypt(encryptedPayload, sessionKey, 5 * 60 * 1000);
+            // Call server executor
+            byte[] response = executor.execute(payload);
+            // Encrypt response with session key
+            byte[] encryptedResp = CryptoUtils.encrypt(response == null ? "TERMINATE".getBytes(java.nio.charset.StandardCharsets.UTF_8) : response, sessionKey);
+            out.writeInt(encryptedResp.length);
+            out.write(encryptedResp);
+            out.flush();
+            // Session closing protocol
+            String ack = null;
+            try {
+                ack = in.readUTF();
+            } catch (EOFException eof) {
+                // Client closed connection early
+                ack = null;
             }
-
-            // --- 4. Call server executor ---
-            byte[] response = executor.execute(decryptedPayload);
-            if (response == null) {
-                // No response: terminate session
-                out.writeUTF("TERMINATE");
+            if ("ACK".equals(ack)) {
+                out.writeUTF("TERMINATE_ACK");
                 out.flush();
-                String ack = in.readUTF();
-                if ("ACK".equals(ack)) {
-                    out.writeUTF("TERMINATE_ACK");
-                    out.flush();
-                }
-                return;
-            } else {
-                // Encrypt and send response
-                byte[] encryptedResponse = CryptoUtils.encrypt(response, aesKey);
-                out.writeInt(encryptedResponse.length);
-                out.write(encryptedResponse);
-                out.flush();
-                String ack = in.readUTF();
-                if ("ACK".equals(ack)) {
-                    out.writeUTF("TERMINATE_ACK");
-                    out.flush();
-                }
             }
+        } catch (Exception e) {
+            // Log and propagate security errors
+            System.err.println("[SECURITY] Error in handleClient: " + e.getMessage());
+            throw e;
         } finally {
             try { socket.close(); } catch (Exception ignore) {}
         }
     }
 
-        // Helper: sign data with private key (for handshake)
-    private static byte[] asymmetricSign(byte[] data, PrivateKey priv) throws Exception {
-        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
-        sig.initSign(priv);
-        sig.update(data);
-        return sig.sign();
-    }
-
-
-    // Helper: verify signature and freshness
-    private static boolean verifySignatureAndFreshness(byte[] nonce, long timestamp, byte[] signature, PublicKey senderPublicKey) throws Exception {
-        long now = System.currentTimeMillis();
-        if (Math.abs(now - timestamp) > 5 * 60 * 1000) return false; // 5 min window
-        // Verify signature using sender's public key
-        byte[] toVerify = new byte[nonce.length + 8];
-        System.arraycopy(nonce, 0, toVerify, 0, nonce.length);
-        for (int i = 0; i < 8; i++) toVerify[nonce.length + i] = (byte) (timestamp >>> (8 * (7 - i)));
-        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
-        sig.initVerify(senderPublicKey);
-        sig.update(toVerify);
-        return sig.verify(signature);
-    }
-
-    // Helper: load private key from PKCS8 bytes
-    private static PrivateKey loadPrivateKey(byte[] keyBytes) throws Exception {
-        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(keyBytes);
-        KeyFactory kf = KeyFactory.getInstance("RSA");
-        return kf.generatePrivate(spec);
-    }
-    // Helper: load public key from X509 bytes
-    private static PublicKey loadPublicKey(byte[] keyBytes) throws Exception {
-        X509EncodedKeySpec spec = new X509EncodedKeySpec(keyBytes);
-        KeyFactory kf = KeyFactory.getInstance("RSA");
-        return kf.generatePublic(spec);
-    }
-    // Helper: asymmetric decrypt (for demo, just return input; replace with real RSA decryption)
-    private static byte[] asymmetricDecrypt(byte[] data, PrivateKey priv, PublicKey pub) throws Exception {
-        // Decrypt with private key (RSA/ECB/PKCS1Padding)
-        javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("RSA/ECB/PKCS1Padding");
-        cipher.init(javax.crypto.Cipher.DECRYPT_MODE, priv);
-        return cipher.doFinal(data);
-    }
-    // Helper: asymmetric encrypt (for demo, just return input; replace with real RSA encryption)
-    private static byte[] asymmetricEncrypt(byte[] data, PublicKey pub, PrivateKey priv) throws Exception {
-        // Encrypt with public key (RSA/ECB/PKCS1Padding)
-        javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("RSA/ECB/PKCS1Padding");
-        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, pub);
-        return cipher.doFinal(data);
-    }
 // (Old unreachable code removed)
 }
