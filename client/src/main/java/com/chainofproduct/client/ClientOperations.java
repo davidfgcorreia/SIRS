@@ -8,9 +8,9 @@ public class ClientOperations {
     private final BlockingQueue<Request> sendQueue;
     private final Object sendLock;
     private final String clientName;
-    private final String privKeyFile;
-    private final String pubKeyFile;
-    private final String serverPubKeyFile;
+    private final String entityType;
+    private final int clientNum;
+    private final String receiverEntity;
     private final String serverHost;
     private final int serverPort;
 
@@ -18,19 +18,14 @@ public class ClientOperations {
         this.sendQueue = sendQueue;
         this.sendLock = sendLock;
         this.clientName = clientName;
-
-        // demo keys location convention
-        this.privKeyFile = "keys/" + clientName.toLowerCase().replace(" ", "-") + "-private.key";
-        this.pubKeyFile = "keys/" + clientName.toLowerCase().replace(" ", "-") + "-public.key";
-
-        // Load server info from localizationinfo/serverinfo.json
-        String pubKeyFile = null;
+        this.entityType = "client";
+        this.clientNum = parseClientNum(clientName);
+        this.receiverEntity = "server";
         String host = null;
         int port = 0;
         try {
             java.nio.file.Path infoPath = java.nio.file.Paths.get("localization_info/server_info.json");
             String json = new String(java.nio.file.Files.readAllBytes(infoPath), java.nio.charset.StandardCharsets.UTF_8);
-            pubKeyFile = extractJsonStringField(json, "pubkey");
             host = extractJsonStringField(json, "ip");
             String portStr = extractJsonStringField(json, "port");
             if (portStr != null && !portStr.isEmpty()) {
@@ -39,9 +34,8 @@ public class ClientOperations {
         } catch (Exception e) {
             System.err.println("Failed to load server info from localizationinfo/serverinfo.json: " + e.getMessage());
         }
-        this.serverPubKeyFile =pubKeyFile ;
-        this.serverHost = host ;
-        this.serverPort = port ;
+        this.serverHost = host;
+        this.serverPort = port;
     }
 
     
@@ -63,9 +57,9 @@ public class ClientOperations {
         Request req = new Request(
             this.serverHost,
             this.serverPort,
-            this.privKeyFile,
-            this.pubKeyFile,
-            this.serverPubKeyFile,
+            this.entityType,
+            this.clientNum,
+            this.receiverEntity,
             combined
         );
         enqueueRequest(req);
@@ -76,11 +70,11 @@ public class ClientOperations {
     public void gettransactionById(long id) {
         String payload = "{request_type:getById, servername: " + this.clientName +  ", trasaction_id: " + id + "}";
         Request req = new Request(
-           this.serverHost,
+            this.serverHost,
             this.serverPort,
-            this.privKeyFile,
-            this.pubKeyFile,
-            this.serverPubKeyFile,
+            this.entityType,
+            this.clientNum,
+            this.receiverEntity,
             payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)
         );
         enqueueRequest(req);
@@ -93,9 +87,9 @@ public class ClientOperations {
         Request req = new Request(
             this.serverHost,
             this.serverPort,
-            this.privKeyFile,
-            this.pubKeyFile,
-            this.serverPubKeyFile,
+            this.entityType,
+            this.clientNum,
+            this.receiverEntity,
             payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)
         );
         enqueueRequest(req);
@@ -108,9 +102,9 @@ public class ClientOperations {
         Request req = new Request(
             this.serverHost,
             this.serverPort,
-            this.privKeyFile,
-            this.pubKeyFile,
-            this.serverPubKeyFile,
+            this.entityType,
+            this.clientNum,
+            this.receiverEntity,
             payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)
         );
         enqueueRequest(req);
@@ -123,9 +117,9 @@ public class ClientOperations {
         Request req = new Request(
             this.serverHost,
             this.serverPort,
-            this.privKeyFile,
-            this.pubKeyFile,
-            this.serverPubKeyFile,
+            this.entityType,
+            this.clientNum,
+            this.receiverEntity,
             payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)
         );
         enqueueRequest(req);
@@ -138,9 +132,9 @@ public class ClientOperations {
         Request req = new Request(
             this.serverHost,
             this.serverPort,
-            this.privKeyFile,
-            this.pubKeyFile,
-            this.serverPubKeyFile,
+            this.entityType,
+            this.clientNum,
+            this.receiverEntity,
             payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)
         );
         enqueueRequest(req);
@@ -165,8 +159,6 @@ public class ClientOperations {
 
 
     
-
-
 
 
 
@@ -217,8 +209,8 @@ public class ClientOperations {
             java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
             byte[] fileHash = digest.digest(fileBytes);
 
-            // 4. Load my public key
-            java.security.PublicKey myPubKey = loadPublicKey(this.pubKeyFile);
+            // 4. Load my public key from PKCS12 truststore-pubkeys
+            java.security.PublicKey myPubKey = loadPublicKeyFromTruststore("keys/client-truststore-pubkeys.p12", this.clientName, "changeit");
 
             // 5. Verify the relevant signature
             if ("seller".equalsIgnoreCase(role)) {
@@ -236,13 +228,19 @@ public class ClientOperations {
     }
 
 
-    // Helper to load a public key from file
-    private java.security.PublicKey loadPublicKey(String pubKeyFile) throws Exception {
-        byte[] keyBytes = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(pubKeyFile));
-        java.security.spec.X509EncodedKeySpec spec = new java.security.spec.X509EncodedKeySpec(keyBytes);
-        java.security.KeyFactory kf = java.security.KeyFactory.getInstance("RSA");
-        return kf.generatePublic(spec);
+    // Helper to load a public key from PKCS12 truststore-pubkeys
+    private java.security.PublicKey loadPublicKeyFromTruststore(String truststorePath, String alias, String password) throws Exception {
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(truststorePath)) {
+            java.security.KeyStore ks = java.security.KeyStore.getInstance("PKCS12");
+            ks.load(fis, password.toCharArray());
+            java.security.cert.Certificate cert = ks.getCertificate(alias);
+            if (cert == null) {
+                throw new java.security.KeyStoreException("No certificate found for alias: " + alias);
+            }
+            return cert.getPublicKey();
+        }
     }
+
     // Helper to verify a signature
     private boolean verifySignature(byte[] data, String signatureB64, java.security.PublicKey pubKey) throws Exception {
         byte[] sigBytes = java.util.Base64.getDecoder().decode(signatureB64);
@@ -250,6 +248,13 @@ public class ClientOperations {
         sig.initVerify(pubKey);
         sig.update(data);
         return sig.verify(sigBytes);
+    }
+
+    // Helper to extract client number from clientName (e.g., "client42" -> 42)
+    private int parseClientNum(String clientName) {
+        String digits = clientName.replaceAll("\\D+", "");
+        if (digits.isEmpty()) return 0;
+        return Integer.parseInt(digits);
     }
 
             // Helper to extract a string field from a simple JSON object (no nested objects)

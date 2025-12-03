@@ -40,14 +40,14 @@ public class SendManager implements Runnable {
                     Runnable sendTask = () -> {
                         byte[] result = null;
                         try {
-                                result =ApiCalls.actAsSender(
-                                    req.getHost(),
-                                    req.getPort(),
-                                    req.getPrivKeyFile(),
-                                    req.getPubKeyFile(),
-                                    req.getReceiverPubKeyFile(),
-                                    req.getDataFile()
-                                );
+                            result = ApiCalls.actAsSender(
+                                req.getHost(),
+                                req.getPort(),
+                                req.getEntityType(),
+                                req.getClientNum(),
+                                req.getReceiverEntity(),
+                                req.getDataFile()
+                            );
                         } catch (Exception e) {
                             e.printStackTrace();
                         }
