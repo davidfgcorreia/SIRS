@@ -9,8 +9,8 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 
 public class DatabaseInitializer {
-  private static final String DB_URL = "jdbc:postgresql://localhost:5432/server-name";
-  private static final String ADMIN_USER = "server-name";
+  private static final String DB_URL = "jdbc:postgresql://localhost:5433/chainofproduct_central";
+  private static final String ADMIN_USER = "chainofproduct_admin";
   private static final String ADMIN_PASSWORD = "password";
 
   public static void initializeDatabase() throws SQLException, IOException {
@@ -18,7 +18,7 @@ public class DatabaseInitializer {
         Statement stmt = conn.createStatement()) {
       // Create transaction table
       // Read the SQL file into a string
-      String sql = new String(Files.readAllBytes(Paths.get("populate.sql")));
+      String sql = new String(Files.readAllBytes(Paths.get("db/src/main/java/com/chainofproduct/db/populate.sql")));
 
       // Split by semicolon if multiple statements
       for (String query : sql.split(";")) {
