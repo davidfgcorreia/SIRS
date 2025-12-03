@@ -9,6 +9,7 @@ import com.chainofproduct.utils.ApiCalls.ServerExecutor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
+import java.util.Arrays;
 
 public class ServerExecutorImpl implements ServerExecutor {
 
@@ -24,19 +25,37 @@ public class ServerExecutorImpl implements ServerExecutor {
    */
   @Override
   public byte[] execute(byte[] request) throws Exception {
-    String jsonString = new String(request, StandardCharsets.UTF_8);
+
+    int newlineIndex = -1;
+    for (int i = 0; i < request.length; i++) { // before the binary, sql:<number>\n needs to exist
+      if (request[i] == '\n') { // ASCII 10
+        newlineIndex = i;
+        break;
+      }
+    }
+    if (newlineIndex == -1) {
+      throw new IllegalStateException("No newline delimiter found!");
+    }
+
+    // Step 2: Extract header text
+    String header = new String(Arrays.copyOfRange(request, 0, newlineIndex),
+        StandardCharsets.UTF_8);
+    int sql = Integer.parseInt(header.split(":")[1]);
+
+    byte[] binaryData = Arrays.copyOfRange(request, newlineIndex + 1, request.length);
+    String text = new String(binaryData, StandardCharsets.UTF_8);
+
+    int endIndex = text.indexOf("}") + 1;
+    String jsonString = text.substring(newlineIndex, endIndex);
+
+    // String jsonString = new String(request, StandardCharsets.UTF_8);
     ObjectMapper mapper = new ObjectMapper();
     JsonNode json = mapper.readTree(jsonString);
-    String response;
 
-    int sql = json.get("sql").asInt();
     long id;
     long timestamp;
     String seller;
     String buyer;
-    String product;
-    long units;
-    long amount;
 
     long transactionId;
     String share;
@@ -54,16 +73,12 @@ public class ServerExecutorImpl implements ServerExecutor {
         timestamp = json.get("timestamp").asInt();
         seller = json.get("seller").asText();
         buyer = json.get("buyer").asText();
-        product = json.get("product").asText();
-        units = json.get("units").asInt();
-        amount = json.get("amount").asInt();
         try {
-          DatabaseOperations.insertTransaction(id, timestamp, seller, buyer, product, units, amount);
+          DatabaseOperations.insertTransaction(id, timestamp, seller, buyer, binaryData);
         } catch (SQLException e) {
           // do something
         }
-        response = "New transaction inserted in database!"; // FIXME: should it be no response?
-        return response.getBytes(StandardCharsets.UTF_8);
+        return null;
 
       case 1:
         transactionId = json.get("transactionId").asInt();
@@ -74,8 +89,8 @@ public class ServerExecutorImpl implements ServerExecutor {
         } catch (SQLException e) {
           // do something
         }
-        response = "New share inserted in database!";
-        return response.getBytes(StandardCharsets.UTF_8);
+
+        return null;
 
       case 2:
         transactionId = json.get("transactionId").asInt();
@@ -147,13 +162,13 @@ public class ServerExecutorImpl implements ServerExecutor {
         } catch (SQLException e) {
           // do something
         }
-        response = "New destination inserted in database!";
-        return response.getBytes(StandardCharsets.UTF_8);
+
+        return null;
 
       default:
         // unrecognizable command (sql)
         break;
     }
-    return null;
+    return null; // TODO: needs to give a error of op not found
   }
 }

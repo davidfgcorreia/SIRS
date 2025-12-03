@@ -4,9 +4,7 @@ CREATE TABLE IF NOT EXISTS transaction (
     timestamp BIGINT NOT NULL,
     seller VARCHAR(255) NOT NULL,
     buyer VARCHAR(255) NOT NULL,
-    product VARCHAR(255) NOT NULL,
-    units BIGINT NOT NULL,
-    amount BIGINT NOT NULL
+    raw_file BYTEA NOT NULL
 );
 
 -- create table transaction_shares
@@ -36,8 +34,8 @@ ON CONFLICT (company) DO NOTHING;
 
 INSERT INTO transaction (id, timestamp, seller, buyer, product, units, amount)
 VALUES
-    (1, 1764069200, 'Ching Chong Extractions', 'Lays Chips', 'Uranium', 67000, 676767),
-    (2, 1764069300, 'Lays Chips', 'Ching Chong Extractions', 'Plutonium', 21000, 212121);
+    (1, 1764069200, 'Ching Chong Extractions', 'Lays Chips'), -- FIXME: how to do add a binary?
+    (2, 1764069300, 'Lays Chips', 'Ching Chong Extractions');
 
 INSERT INTO transaction_shares (id, share, shared_by)
 VALUES

@@ -20,18 +20,16 @@ public class DatabaseOperations {
     return SERVER_NAME;
   }
 
-  public static void insertTransaction(long id, long timestamp, String seller, String buyer, String product, long units,
-      long amount) throws SQLException {
-    String sql = "INSERT INTO transaction (id, timestamp, seller, buyer, product, units, amount) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING";
+  public static void insertTransaction(long id, long timestamp, String seller, String buyer, byte[] raw_file)
+      throws SQLException {
+    String sql = "INSERT INTO transaction (id, timestamp, seller, buyer, raw_file) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING";
     try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
         PreparedStatement pstmt = conn.prepareStatement(sql)) {
       pstmt.setLong(1, id);
       pstmt.setLong(2, timestamp);
       pstmt.setString(3, seller);
       pstmt.setString(4, buyer);
-      pstmt.setString(5, product);
-      pstmt.setLong(6, units);
-      pstmt.setLong(7, amount);
+      pstmt.setBytes(5, raw_file);
       pstmt.executeUpdate();
     }
   }
@@ -90,9 +88,7 @@ public class DatabaseOperations {
             rs.getLong("timestamp"),
             rs.getString("seller"),
             rs.getString("buyer"),
-            rs.getString("product"),
-            rs.getLong("units"),
-            rs.getLong("amount")));
+            rs.getBytes("raw_file")));
       }
     }
     return transactions;
@@ -110,9 +106,7 @@ public class DatabaseOperations {
               rs.getLong("timestamp"),
               rs.getString("seller"),
               rs.getString("buyer"),
-              rs.getString("product"),
-              rs.getLong("units"),
-              rs.getLong("amount"));
+              rs.getBytes("raw_file"));
         }
       }
     }
@@ -166,19 +160,14 @@ public class DatabaseOperations {
     public final long timestamp;
     public final String seller;
     public final String buyer;
-    public final String product;
-    public final long units;
-    public final long amount;
+    public final byte[] raw_file;
 
-    public TransactionRecord(long id, long timestamp, String seller, String buyer, String product, long units,
-        long amount) {
+    public TransactionRecord(long id, long timestamp, String seller, String buyer, byte[] raw_file) {
       this.id = id;
       this.timestamp = timestamp;
       this.seller = seller;
       this.buyer = buyer;
-      this.product = product;
-      this.units = units;
-      this.amount = amount;
+      this.raw_file = raw_file;
     }
   }
 
