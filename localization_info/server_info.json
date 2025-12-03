@@ -1,5 +1,5 @@
 {
   "pubkey": "keys/server-public.key",
   "ip": "localhost",
-  "port": "50051"
+  "port": "8443"
 }

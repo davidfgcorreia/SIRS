@@ -3,10 +3,11 @@ package com.chainofproduct.client;
 public class ClientMain {
     public static void main(String[] args) {
         if (args.length < 1) {
-            System.err.println("Usage: java ClientMain <serverName>");
+            System.err.println("Usage: java ClientMain <companyName>");
             System.exit(1);
         }
-        String serverName = args[0];
+        // Join all args with space to handle company names with spaces
+        String companyName = String.join(" ", args);
 
         // Shared queue and lock for sending requests (if needed)
         java.util.concurrent.BlockingQueue<com.chainofproduct.utils.Request> sendQueue = new java.util.concurrent.LinkedBlockingQueue<>();
@@ -18,8 +19,8 @@ public class ClientMain {
         sendManagerThread.setDaemon(true);
         sendManagerThread.start();
 
-        // Pass serverName to operations/CLI
-        ClientOperations operations = new ClientOperations(sendQueue, sendLock, serverName);
+        // Pass companyName to operations/CLI
+        ClientOperations operations = new ClientOperations(sendQueue, sendLock, companyName);
         CommandLine cli = new CommandLine(operations);
         cli.run();
 
