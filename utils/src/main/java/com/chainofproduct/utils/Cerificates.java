@@ -60,19 +60,6 @@ public class Cerificates {
 		System.out.println("  Truststore (public key): " + pubkeyTruststoreFile);
 	}
 
-		// Store all public keys in a PKCS12 truststore (as encoded bytes)
-		public static void storePubKeyTruststore(String truststorePath, String password, String[] allEntities, PublicKey[] pubKeys) throws Exception {
-			KeyStore ts = KeyStore.getInstance("PKCS12");
-			ts.load(null, null);
-			for (int i = 0; i < allEntities.length; i++) {
-				java.security.cert.Certificate cert = generateSelfSignedCertificate(new KeyPair(pubKeys[i], generateDeterministicKeyPair("pubkey-temp").getPrivate()), "CN=" + allEntities[i] + "-pubkey, OU=Org, O=Company, L=City, ST=State, C=PT");
-				ts.setCertificateEntry(allEntities[i] + "-pubkey", cert);
-			}
-			try (FileOutputStream fos = new FileOutputStream(truststorePath)) {
-				ts.store(fos, password.toCharArray());
-			}
-		}
-
 	// Deterministic RSA keypair from entity name
 	private static KeyPair generateDeterministicKeyPair(String name) throws Exception {
 		KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
@@ -112,6 +99,19 @@ public class Cerificates {
 		ts.load(null, null);
 		for (int i = 0; i < allEntities.length; i++) {
 			ts.setCertificateEntry(allEntities[i], certs[i]);
+		}
+		try (FileOutputStream fos = new FileOutputStream(truststorePath)) {
+			ts.store(fos, password.toCharArray());
+		}
+	}
+
+	// Store all public keys in a PKCS12 truststore (as encoded bytes)
+	public static void storePubKeyTruststore(String truststorePath, String password, String[] allEntities, PublicKey[] pubKeys) throws Exception {
+		KeyStore ts = KeyStore.getInstance("PKCS12");
+		ts.load(null, null);
+		for (int i = 0; i < allEntities.length; i++) {
+			java.security.cert.Certificate cert = generateSelfSignedCertificate(new KeyPair(pubKeys[i], generateDeterministicKeyPair("pubkey-temp").getPrivate()), "CN=" + allEntities[i] + "-pubkey, OU=Org, O=Company, L=City, ST=State, C=PT");
+			ts.setCertificateEntry(allEntities[i] + "-pubkey", cert);
 		}
 		try (FileOutputStream fos = new FileOutputStream(truststorePath)) {
 			ts.store(fos, password.toCharArray());
