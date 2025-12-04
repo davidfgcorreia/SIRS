@@ -20,34 +20,24 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
  * Implements SR1-SR4 security requirements for Chain of Product.
  */
 public class ServerOperations {
-    private final String serverName;
     private final PrivateKey serverPrivateKey;
     private final SecretKey storageKey; // For encrypting transactions at rest (SR1)
     private final String dbHost;
     private final int dbPort;
-    private final String dbPubKeyFile;
-    private final String serverPrivKeyFile;
-    private final String serverPubKeyFile;
     private final ObjectMapper jsonMapper;
 
     public ServerOperations() throws Exception {
-        this.serverName = "Central Server"; // Default server name
-        this.serverPrivKeyFile = "keys/server-private.key";
-        this.serverPubKeyFile = "keys/server-public.key";
-        
         // Load server's private key for signing share operations
-        this.serverPrivateKey = CryptoUtils.loadPrivateKey(serverPrivKeyFile);
+        this.serverPrivateKey = loadPrivateKeyFromKeystore("server-keystore.p12", "changeit", "server");
         // Load or generate storage encryption key for database
         this.storageKey = loadOrGenerateStorageKey();
         
         // Load database connection info from config
-        String dbPubKey = null;
         String host = "localhost";
         int port = 5432;
         try {
             java.nio.file.Path infoPath = java.nio.file.Paths.get("localization_info/database_info.json");
             String json = new String(java.nio.file.Files.readAllBytes(infoPath), java.nio.charset.StandardCharsets.UTF_8);
-            dbPubKey = extractJsonStringField(json, "pubkey");
             host = extractJsonStringField(json, "ip");
             String portStr = extractJsonStringField(json, "port");
             if (portStr != null && !portStr.isEmpty()) {
@@ -55,11 +45,9 @@ public class ServerOperations {
             }
         } catch (Exception e) {
             System.err.println("Failed to load database info, using defaults: " + e.getMessage());
-            dbPubKey = "keys/database-public.key";
         }
         this.dbHost = host;
         this.dbPort = port;
-        this.dbPubKeyFile = dbPubKey;
         this.jsonMapper = new ObjectMapper();
     }
     
@@ -193,7 +181,7 @@ public class ServerOperations {
             System.out.println("DEBUG: transactionBytes length=" + transactionBytes.length);
             System.out.println("DEBUG: signature length=" + signature.length());
             
-            if (!CryptoUtils.verifySignature(transactionBytes, signature, sourcePubKey)) {
+            if (!verifySignature(transactionBytes, signature, sourcePubKey)) {
                 return errorResponse("Invalid signature from " + source);
             }
             
@@ -225,7 +213,7 @@ public class ServerOperations {
             // SR4: Add initial shares with server signature via TCP (sql=1: addShare)
             long shareTime = System.currentTimeMillis();
             String shareData = String.format("%d:%s:server", id, seller);
-            String sellerShareSig = CryptoUtils.signData(shareData.getBytes(), serverPrivateKey);
+            String sellerShareSig = signData(shareData.getBytes(), serverPrivateKey);
             
             ObjectNode shareRequest1 = jsonMapper.createObjectNode();
             shareRequest1.put("sql", 1);
@@ -237,7 +225,7 @@ public class ServerOperations {
             sendDatabaseRequest(shareRequest1);
             
             shareData = String.format("%d:%s:server", id, buyer);
-            String buyerShareSig = CryptoUtils.signData(shareData.getBytes(), serverPrivateKey);
+            String buyerShareSig = signData(shareData.getBytes(), serverPrivateKey);
             
             ObjectNode shareRequest2 = jsonMapper.createObjectNode();
             shareRequest2.put("sql", 1);
@@ -291,7 +279,7 @@ public class ServerOperations {
             // Verify signature on share request
             String shareData = String.format("%d:%s:%s", id, shareWith, source);
             PublicKey sourcePubKey = getCompanyPublicKey(source);
-            if (!CryptoUtils.verifySignature(shareData.getBytes(), signature, sourcePubKey)) {
+            if (!verifySignature(shareData.getBytes(), signature, sourcePubKey)) {
                 return errorResponse("Invalid share signature");
             }
             
@@ -536,13 +524,63 @@ public class ServerOperations {
     }
     
     /**
-     * Helper: Load public key for a company via TCP.
+     * Helper: Load private key from PKCS12 keystore.
+     */
+    private PrivateKey loadPrivateKeyFromKeystore(String keystorePath, String password, String alias) throws Exception {
+        java.security.KeyStore keyStore = java.security.KeyStore.getInstance("PKCS12");
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(keystorePath)) {
+            keyStore.load(fis, password.toCharArray());
+        }
+        return (PrivateKey) keyStore.getKey(alias, password.toCharArray());
+    }
+    
+    /**
+     * Helper: Load public key from PKCS12 truststore.
+     */
+    private PublicKey loadPublicKeyFromKeystore(String truststorePath, String password, String alias) throws Exception {
+        java.security.KeyStore keyStore = java.security.KeyStore.getInstance("PKCS12");
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(truststorePath)) {
+            keyStore.load(fis, password.toCharArray());
+        }
+        java.security.cert.Certificate cert = keyStore.getCertificate(alias);
+        if (cert == null) {
+            throw new Exception("Certificate not found for alias: " + alias);
+        }
+        return cert.getPublicKey();
+    }
+    
+    /**
+     * Helper: Sign data using RSA private key.
+     */
+    private String signData(byte[] data, PrivateKey privateKey) throws Exception {
+        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+        sig.initSign(privateKey);
+        sig.update(data);
+        byte[] signature = sig.sign();
+        return Base64.getEncoder().encodeToString(signature);
+    }
+    
+    /**
+     * Helper: Verify RSA signature.
+     */
+    private boolean verifySignature(byte[] data, String signatureB64, PublicKey publicKey) throws Exception {
+        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+        sig.initVerify(publicKey);
+        sig.update(data);
+        byte[] signature = Base64.getDecoder().decode(signatureB64);
+        return sig.verify(signature);
+    }
+    
+    /**
+     * Helper: Load public key for a company from truststore.
      */
     private PublicKey getCompanyPublicKey(String companyName) throws Exception {
-        // For now, directly load from filesystem (companies table has file paths)
-        // In production, you'd query database server for this
-        String keyPath = "keys/" + companyName.toLowerCase().replace(" ", "-") + "-public.key";
-        return CryptoUtils.loadPublicKey(keyPath);
+        // Map company names to certificate aliases
+        // For client companies, the alias format is "client<num>"
+        // This is a simplified mapping - in production you'd have a proper registry
+        String alias = companyName.toLowerCase().replace(" ", "").replace("-", "");
+        // Try to load from server's truststore which contains all public keys
+        return loadPublicKeyFromKeystore("server-truststore.p12", "changeit", alias);
     }
     
     /**
@@ -550,7 +588,7 @@ public class ServerOperations {
      */
     private byte[] sendDatabaseRequest(ObjectNode request) throws Exception {
         byte[] requestBytes = jsonMapper.writeValueAsBytes(request);
-        return ApiCalls.actAsSender(dbHost, dbPort, serverPrivKeyFile, serverPubKeyFile, dbPubKeyFile, requestBytes);
+        return ApiCalls.actAsSender(dbHost, dbPort, "server", 0, "db", requestBytes);
     }
     
     /**
