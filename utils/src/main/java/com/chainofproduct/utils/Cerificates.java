@@ -20,33 +20,12 @@ public class Cerificates {
 
 	public static void main(String[] args) {
 		if (args.length < 1) {
-			System.err.println("Usage: java Cerificates <server|db|client N>");
+			System.err.println("Usage: java Cerificates <entityName>");
 			System.exit(1);
 		}
+		String entityName = args[0];
 		try {
-			switch (args[0].toLowerCase()) {
-				case "server":
-					generateForServer();
-					break;
-				case "db":
-					generateForDb();
-					break;
-				case "client":
-					if (args.length < 2) {
-						System.err.println("Usage: java Cerificates client <clientNum>");
-						System.exit(1);
-					}
-					int clientNum = Integer.parseInt(args[1]);
-					if (clientNum < 0 || clientNum > 999) {
-						System.err.println("Client number must be between 0 and 999");
-						System.exit(1);
-					}
-					generateForClient(clientNum);
-					break;
-				default:
-					System.err.println("Unknown mode: " + args[0]);
-					System.exit(1);
-			}
+			generateForEntity(entityName);
 		} catch (Exception e) {
 			e.printStackTrace();
 			System.exit(1);
@@ -54,85 +33,31 @@ public class Cerificates {
 	}
 
 
-	// Server: generate all keypairs, store all public certs, store only server private key
-	private static void generateForServer() throws Exception {
-		int numClients = 1000;
-		String[] allEntities = new String[numClients + 2];
-		allEntities[0] = "server";
-		allEntities[1] = "db";
-		for (int i = 0; i < numClients; i++) allEntities[i + 2] = "client" + i;
 
-		KeyPair[] keyPairs = new KeyPair[allEntities.length];
-		X509Certificate[] certs = new X509Certificate[allEntities.length];
-		for (int i = 0; i < allEntities.length; i++) {
-			String name = allEntities[i];
-			String dn = "CN=" + name + ", OU=Org, O=Company, L=City, ST=State, C=PT";
-			keyPairs[i] = generateDeterministicKeyPair(name);
-			certs[i] = generateSelfSignedCertificate(keyPairs[i], dn);
-		}
-		// Store only server private key/cert
-		String alias = "server";
-		String keystoreFile = alias + "-keystore.p12";
+	// Generate and store one keypair and certificate for the given entity
+	private static void generateForEntity(String entityName) throws Exception {
+		// Also generate and store EC key pair (no certificate, just for ECDH, etc.)
+		String ecKeystoreFile = entityName + "-ec-keystore.p12";
+		String ecKeystorePassword = "changeit";
+		KeyPair ecKeyPair = com.chainofproduct.utils.KeyTransmission.generateECKeyPairAndStore(entityName + "-ec", ecKeystoreFile, ecKeystorePassword);
+		KeyPair keyPair = generateDeterministicKeyPair(entityName);
+		String dn = "CN=" + entityName + ", OU=Org, O=Company, L=City, ST=State, C=PT";
+		X509Certificate cert = generateSelfSignedCertificate(keyPair, dn);
+
+		String keystoreFile = entityName + "-keystore.p12";
 		String keystorePassword = "changeit";
-		storeKeyAndCert(keystoreFile, keystorePassword, alias, keyPairs[0], certs[0]);
-		// Store all public certs
-		String truststoreFile = alias + "-truststore.p12";
-		storeTruststore(truststoreFile, keystorePassword, allEntities, certs, 0);
-		// Store all public keys in a separate truststore
-		String pubkeyTruststoreFile = alias + "-truststore-pubkeys.p12";
-		PublicKey[] pubKeys = new PublicKey[allEntities.length];
-		for (int i = 0; i < allEntities.length; i++) pubKeys[i] = keyPairs[i].getPublic();
-		Cerificates.storePubKeyTruststore(pubkeyTruststoreFile, keystorePassword, allEntities, pubKeys);
-		System.out.println("Generated for server:");
+		storeKeyAndCert(keystoreFile, keystorePassword, entityName, keyPair, cert);
+
+		String truststoreFile = entityName + "-truststore.p12";
+		storeTruststore(truststoreFile, keystorePassword, new String[]{entityName}, new X509Certificate[]{cert}, 0);
+
+		String pubkeyTruststoreFile = entityName + "-truststore-pubkeys.p12";
+		Cerificates.storePubKeyTruststore(pubkeyTruststoreFile, keystorePassword, new String[]{entityName}, new PublicKey[]{keyPair.getPublic()});
+
+		System.out.println("Generated for " + entityName + ":");
 		System.out.println("  Private keystore: " + keystoreFile);
-		System.out.println("  Truststore (all public certs): " + truststoreFile);
-	}
-
-	// Client: generate server keypair/cert, store only server public cert, generate own keypair/cert and store pair
-	private static void generateForClient(int clientNum) throws Exception {
-		int numClients = 1000;
-		String[] allEntities = new String[numClients + 2];
-		allEntities[0] = "server";
-		allEntities[1] = "db";
-		for (int i = 0; i < numClients; i++) allEntities[i + 2] = "client" + i;
-
-		// Generate server and this client
-		KeyPair serverKeyPair = generateDeterministicKeyPair("server");
-		X509Certificate serverCert = generateSelfSignedCertificate(serverKeyPair, "CN=server, OU=Org, O=Company, L=City, ST=State, C=PT");
-		String serverTruststore = "client" + clientNum + "-truststore.p12";
-		storeTruststore(serverTruststore, "changeit", new String[]{"server"}, new X509Certificate[]{serverCert}, 0);
-		// Store server public key in a separate truststore
-		String pubkeyTruststore = "client" + clientNum + "-truststore-pubkeys.p12";
-		Cerificates.storePubKeyTruststore(pubkeyTruststore, "changeit", new String[]{"server"}, new PublicKey[]{serverKeyPair.getPublic()});
-
-		KeyPair clientKeyPair = generateDeterministicKeyPair("client" + clientNum);
-		X509Certificate clientCert = generateSelfSignedCertificate(clientKeyPair, "CN=client" + clientNum + ", OU=Org, O=Company, L=City, ST=State, C=PT");
-		String clientKeystore = "client" + clientNum + "-keystore.p12";
-		storeKeyAndCert(clientKeystore, "changeit", "client" + clientNum, clientKeyPair, clientCert);
-
-		System.out.println("Generated for client" + clientNum + ":");
-		System.out.println("  Private keystore: " + clientKeystore);
-		System.out.println("  Truststore (server public cert): " + serverTruststore);
-	}
-
-	// DB: generate server keypair/cert, store only server public cert, generate own keypair/cert and store pair
-	private static void generateForDb() throws Exception {
-		KeyPair serverKeyPair = generateDeterministicKeyPair("server");
-		X509Certificate serverCert = generateSelfSignedCertificate(serverKeyPair, "CN=server, OU=Org, O=Company, L=City, ST=State, C=PT");
-		String serverTruststore = "db-truststore.p12";
-		storeTruststore(serverTruststore, "changeit", new String[]{"server"}, new X509Certificate[]{serverCert}, 0);
-		// Store server public key in a separate truststore
-		String pubkeyTruststore = "db-truststore-pubkeys.p12";
-		Cerificates.storePubKeyTruststore(pubkeyTruststore, "changeit", new String[]{"server"}, new PublicKey[]{serverKeyPair.getPublic()});
-
-		KeyPair dbKeyPair = generateDeterministicKeyPair("db");
-		X509Certificate dbCert = generateSelfSignedCertificate(dbKeyPair, "CN=db, OU=Org, O=Company, L=City, ST=State, C=PT");
-		String dbKeystore = "db-keystore.p12";
-		storeKeyAndCert(dbKeystore, "changeit", "db", dbKeyPair, dbCert);
-
-		System.out.println("Generated for db:");
-		System.out.println("  Private keystore: " + dbKeystore);
-		System.out.println("  Truststore (server public cert): " + serverTruststore);
+		System.out.println("  Truststore (public cert): " + truststoreFile);
+		System.out.println("  Truststore (public key): " + pubkeyTruststoreFile);
 	}
 
 		// Store all public keys in a PKCS12 truststore (as encoded bytes)
