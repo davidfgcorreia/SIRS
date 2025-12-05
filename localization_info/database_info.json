@@ -1,5 +1,0 @@
-{
-  "pubkey": "keys/database-public.key",
-  "ip": "localhost",
-  "port": "5432"
-}

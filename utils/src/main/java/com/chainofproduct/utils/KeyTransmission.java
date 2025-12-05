@@ -10,6 +10,8 @@ import java.security.KeyFactory;
 import java.security.spec.X509EncodedKeySpec;
 
 public class KeyTransmission {
+
+		public static boolean VERBOSE = true;
 			/**
 			 * Ensures EC keypair exists for the given storePrefix, then starts the key exchange listener.
 			 * @param storePrefix Prefix for truststore and EC keystore file names
@@ -54,32 +56,46 @@ public class KeyTransmission {
 		public static void startKeyExchangeListener(String storePrefix, int listenPort, KeyPair myECKeyPair) throws Exception {
 			listenerRunning.set(true);
 			listenerSocket = new java.net.ServerSocket(listenPort);
-			System.out.println("Key exchange listener started on port " + listenPort);
-			while (listenerRunning.get()) {
-				try {
-					listenerSocket.setSoTimeout(1000); // 1 second timeout for soft shutdown check
-					Socket socket = null;
+			if (VERBOSE) System.out.println("[KeyExchange] Listener started on port " + listenPort);
+			try {
+				while (listenerRunning.get()) {
 					try {
-						socket = listenerSocket.accept();
-					} catch (java.io.InterruptedIOException e) {
-						// Timeout, check shutdown flag
-						continue;
+						listenerSocket.setSoTimeout(1000); // 1 second timeout for soft shutdown check
+						Socket socket = null;
+						try {
+							socket = listenerSocket.accept();
+						} catch (java.io.InterruptedIOException e) {
+							// Timeout, check shutdown flag
+							continue;
+						} catch (java.net.SocketException se) {
+							// Socket closed during shutdown
+							if (!listenerRunning.get()) break;
+							throw se;
+						}
+						if (!listenerRunning.get()) {
+							if (socket != null && !socket.isClosed()) socket.close();
+							break;
+						}
+						if (socket != null) {
+							receiveRSAKeyAndCertWithECDH(storePrefix, socket, myECKeyPair);
+							socket.close();
+						}
+					} catch (Exception e) {
+						if (VERBOSE) {
+							System.err.println("[KeyExchange] Error: " + e.getMessage());
+						}
 					}
-					if (socket != null) {
-						System.out.println("Received key exchange request from " + socket.getInetAddress());
-						receiveRSAKeyAndCertWithECDH(storePrefix, socket, myECKeyPair);
-						System.out.println("Key exchange completed for " + socket.getInetAddress());
-						socket.close();
-					}
-				} catch (Exception e) {
-					System.err.println("Error during key exchange: " + e.getMessage());
-					e.printStackTrace();
 				}
+			} finally {
+				if (listenerSocket != null && !listenerSocket.isClosed()) {
+					try {
+						listenerSocket.close();
+					} catch (Exception e) {
+						System.err.println("Error closing listener socket: " + e.getMessage());
+					}
+				}
+				if (VERBOSE) System.out.println("[KeyExchange] Listener stopped.");
 			}
-			if (listenerSocket != null && !listenerSocket.isClosed()) {
-				listenerSocket.close();
-			}
-			System.out.println("Key exchange listener stopped.");
 		}
 
 		/**
@@ -92,7 +108,7 @@ public class KeyTransmission {
 					listenerSocket.close();
 				}
 			} catch (Exception e) {
-				System.err.println("Error closing key exchange listener: " + e.getMessage());
+				if (VERBOSE) System.err.println("Error closing key exchange listener: " + e.getMessage());
 			}
 		}
 	/**
@@ -106,74 +122,68 @@ public class KeyTransmission {
 		InputStream in = socket.getInputStream();
 		OutputStream out = socket.getOutputStream();
 
-		// 1. Receive sender's alias
 		byte[] aliasBytes = readBytes(in);
 		String senderAlias = new String(aliasBytes, java.nio.charset.StandardCharsets.UTF_8);
 
-		// 2. Receive peer EC public key
 		byte[] peerECPubBytes = readBytes(in);
 		KeyFactory kf = KeyFactory.getInstance("EC");
 		PublicKey peerECPublicKey = kf.generatePublic(new X509EncodedKeySpec(peerECPubBytes));
 
-		// 3. Send our EC public key
 		byte[] myECPubBytes = myECKeyPair.getPublic().getEncoded();
 		out.write(intToBytes(myECPubBytes.length));
 		out.write(myECPubBytes);
 
-		// 3. Derive shared secret
 		javax.crypto.KeyAgreement ka = javax.crypto.KeyAgreement.getInstance("ECDH");
 		ka.init(myECKeyPair.getPrivate());
 		ka.doPhase(peerECPublicKey, true);
 		byte[] sharedSecret = ka.generateSecret();
 
-		// 4. Receive encrypted RSA key and certificate
 		byte[] peerEncryptedRSAKey = readBytes(in);
 		byte[] peerEncryptedCert = readBytes(in);
 		byte[] peerRSAKeyBytes = aesDecrypt(peerEncryptedRSAKey, sharedSecret);
 		byte[] peerCertBytes = aesDecrypt(peerEncryptedCert, sharedSecret);
 
-		// 5. Reconstruct public key and certificate
 		PublicKey peerRSAPublicKey = KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(peerRSAKeyBytes));
 		java.security.cert.CertificateFactory cf = java.security.cert.CertificateFactory.getInstance("X.509");
 		java.io.ByteArrayInputStream certStream = new java.io.ByteArrayInputStream(peerCertBytes);
 		java.security.cert.Certificate peerCert = cf.generateCertificate(certStream);
 
-		// 6. Store all peer certificates in the same <senderAlias>-truststore.p12 file
-		String truststoreFile = senderAlias + "-truststore.p12";
+		String truststoreFile = storePrefix + "-truststore.p12";
 		String truststorePassword = "changeit";
-		java.security.KeyStore truststore = java.security.KeyStore.getInstance("PKCS12");
-		java.io.File truststoreF = new java.io.File(truststoreFile);
-		if (truststoreF.exists()) {
-			try (java.io.FileInputStream fis = new java.io.FileInputStream(truststoreF)) {
-				truststore.load(fis, truststorePassword.toCharArray());
-			}
-		} else {
-			truststore.load(null, null);
-		}
-		String uniquePeerCertAlias = senderAlias + "-" + System.currentTimeMillis();
-		truststore.setCertificateEntry(uniquePeerCertAlias, peerCert);
-		try (java.io.FileOutputStream fos = new java.io.FileOutputStream(truststoreFile)) {
-			truststore.store(fos, truststorePassword.toCharArray());
-		}
+		// Store the received peer certificate in our truststore
+		// Always use senderAlias as the truststore alias (matches test expectation)
+		Cerificates.storeTruststore(truststoreFile, truststorePassword, new String[]{senderAlias}, new java.security.cert.X509Certificate[]{(java.security.cert.X509Certificate)peerCert}, 0);
 
-		// 7. Store all peer public keys in the same <senderAlias>-truststore-pubkeys.p12 file
-		String pubkeyTruststoreFile = senderAlias + "-truststore-pubkeys.p12";
-		String pubkeyTruststorePassword = "changeit";
-		java.security.KeyStore pubkeyTs = java.security.KeyStore.getInstance("PKCS12");
-		java.io.File pubkeyTsFile = new java.io.File(pubkeyTruststoreFile);
-		if (pubkeyTsFile.exists()) {
-			try (java.io.FileInputStream fis = new java.io.FileInputStream(pubkeyTsFile)) {
-				pubkeyTs.load(fis, pubkeyTruststorePassword.toCharArray());
-			}
-		} else {
-			pubkeyTs.load(null, null);
+		String pubkeyTruststoreFile = storePrefix + "-truststore-pubkeys.p12";
+		// Store the received peer public key in our pubkey truststore
+		Cerificates.storePubKeyTruststore(pubkeyTruststoreFile, truststorePassword, new String[]{senderAlias}, new PublicKey[]{peerRSAPublicKey});
+        // --- Mutual key/cert exchange: send our own RSA public key and certificate back to the sender ---
+
+		// Load our own RSA public key and certificate from keystore using Cerificates logic
+		String myEntityName = storePrefix;
+		String myKeystorePath = myEntityName + "-keystore.p12";
+		String myKeystorePassword = "changeit";
+		java.security.KeyStore myKeystore = Cerificates.getKeystore(myEntityName, myKeystorePassword);
+		if (myKeystore == null) {
+			throw new java.io.FileNotFoundException("Keystore not found: " + myKeystorePath);
 		}
-		String uniquePeerPubkeyAlias = senderAlias + "-pubkey";
-		java.security.cert.Certificate[] dummyChain = { generateDummySelfSignedCert(new KeyPair(peerRSAPublicKey, myECKeyPair.getPrivate())) };
-		pubkeyTs.setCertificateEntry(uniquePeerPubkeyAlias, dummyChain[0]);
-		try (java.io.FileOutputStream fos = new java.io.FileOutputStream(pubkeyTruststoreFile)) {
-			pubkeyTs.store(fos, pubkeyTruststorePassword.toCharArray());
+		java.security.cert.Certificate myCert = myKeystore.getCertificate(myEntityName);
+		if (myCert == null) {
+			throw new java.security.cert.CertificateException("No certificate found for alias: " + myEntityName);
 		}
+		java.security.PublicKey myRSAPubKey = myCert.getPublicKey();
+
+        // Encrypt our RSA public key and certificate with the shared secret
+        byte[] myRSAPubKeyBytes = myRSAPubKey.getEncoded();
+		byte[] myRSACertBytes = myCert.getEncoded();
+        byte[] encryptedMyRSAPubKey = aesEncrypt(myRSAPubKeyBytes, sharedSecret);
+        byte[] encryptedMyRSACert = aesEncrypt(myRSACertBytes, sharedSecret);
+
+		out.write(intToBytes(encryptedMyRSAPubKey.length));
+		out.write(encryptedMyRSAPubKey);
+		out.write(intToBytes(encryptedMyRSACert.length));
+		out.write(encryptedMyRSACert);
+		out.flush();
 	}
 
 	/**
@@ -193,91 +203,86 @@ public class KeyTransmission {
 	 * @param peerAlias Alias for the peer (used for truststore entry)
 	 */
 	public static void sendRSAKeyAndCertWithECDH(String storePrefix,String myAlias ,String peerAlias, String receiverIp, int receiverPort, KeyPair myECKeyPair, PublicKey myRSAPublicKey, X509Certificate myCertificate) throws Exception {
+					// --- VERBOSE: log all received messages/data ---
 		try (Socket socket = new Socket(receiverIp, receiverPort)) {
 			OutputStream out = socket.getOutputStream();
 			InputStream in = socket.getInputStream();
 
-			// 1. Send our alias first
+
 			byte[] myAliasBytes = myAlias.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 			out.write(intToBytes(myAliasBytes.length));
 			out.write(myAliasBytes);
 
-			// 2. ECDH key exchange
+
 			byte[] myECPubBytes = myECKeyPair.getPublic().getEncoded();
 			out.write(intToBytes(myECPubBytes.length));
 			out.write(myECPubBytes);
 
+
 			byte[] peerECPubBytes = readBytes(in);
+
 			KeyFactory kf = KeyFactory.getInstance("EC");
 			PublicKey peerECPublicKey = kf.generatePublic(new X509EncodedKeySpec(peerECPubBytes));
 
-			// Derive shared secret
+
 			javax.crypto.KeyAgreement ka = javax.crypto.KeyAgreement.getInstance("ECDH");
 			ka.init(myECKeyPair.getPrivate());
 			ka.doPhase(peerECPublicKey, true);
 			byte[] sharedSecret = ka.generateSecret();
 
-			// 2. Encrypt RSA key and certificate with shared secret
+
 			byte[] rsaKeyBytes = myRSAPublicKey.getEncoded();
 			byte[] certBytes = myCertificate.getEncoded();
+
+
 			byte[] encryptedRSAKey = aesEncrypt(rsaKeyBytes, sharedSecret);
 			byte[] encryptedCert = aesEncrypt(certBytes, sharedSecret);
 
-			// 3. Send encrypted RSA key and certificate
+
 			out.write(intToBytes(encryptedRSAKey.length));
 			out.write(encryptedRSAKey);
+
 			out.write(intToBytes(encryptedCert.length));
 			out.write(encryptedCert);
+			// After sending, log all received data
 
-			// 4. Receive peer's encrypted RSA key and certificate
 			byte[] peerEncryptedRSAKey = readBytes(in);
+
 			byte[] peerEncryptedCert = readBytes(in);
+
 			byte[] peerRSAKeyBytes = aesDecrypt(peerEncryptedRSAKey, sharedSecret);
 			byte[] peerCertBytes = aesDecrypt(peerEncryptedCert, sharedSecret);
 
-			// Reconstruct public key and certificate
 			PublicKey peerRSAPublicKey = KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(peerRSAKeyBytes));
 			java.security.cert.CertificateFactory cf = java.security.cert.CertificateFactory.getInstance("X.509");
 			java.io.ByteArrayInputStream certStream = new java.io.ByteArrayInputStream(peerCertBytes);
 			java.security.cert.Certificate peerCert = cf.generateCertificate(certStream);
 
-			// Store all peer certificates in the same <storePrefix>-truststore.p12 file
-			String truststoreFile = storePrefix + "-truststore.p12";
+
 			String truststorePassword = "changeit";
-			java.security.KeyStore truststore = java.security.KeyStore.getInstance("PKCS12");
-			java.io.File truststoreF = new java.io.File(truststoreFile);
-			if (truststoreF.exists()) {
-				try (java.io.FileInputStream fis = new java.io.FileInputStream(truststoreF)) {
-					truststore.load(fis, truststorePassword.toCharArray());
-				}
+			// Use the getter to load the truststore (or create new if null)
+			java.security.KeyStore truststore = Cerificates.getTruststore(storePrefix, truststorePassword);
+			if (truststore == null) {
+				// If truststore doesn't exist, create and store
+				Cerificates.storeTruststore(storePrefix + "-truststore.p12", truststorePassword, new String[]{peerAlias}, new java.security.cert.X509Certificate[]{(java.security.cert.X509Certificate)peerCert}, 0);
 			} else {
-				truststore.load(null, null);
-			}
-			// Use a unique alias for each peer certificate
-			String uniquePeerCertAlias = peerAlias + "-" + System.currentTimeMillis();
-			truststore.setCertificateEntry(uniquePeerCertAlias, peerCert);
-			try (java.io.FileOutputStream fos = new java.io.FileOutputStream(truststoreFile)) {
-				truststore.store(fos, truststorePassword.toCharArray());
+				truststore.setCertificateEntry(peerAlias, (java.security.cert.X509Certificate)peerCert);
+				try (java.io.FileOutputStream fos = new java.io.FileOutputStream(storePrefix + "-truststore.p12")) {
+					truststore.store(fos, truststorePassword.toCharArray());
+				}
 			}
 
-			// Store all peer public keys in the same <storePrefix>-truststore-pubkeys.p12 file
-			String pubkeyTruststoreFile = storePrefix + "-truststore-pubkeys.p12";
-			String pubkeyTruststorePassword = "changeit";
-			java.security.KeyStore pubkeyTs = java.security.KeyStore.getInstance("PKCS12");
-			java.io.File pubkeyTsFile = new java.io.File(pubkeyTruststoreFile);
-			if (pubkeyTsFile.exists()) {
-				try (java.io.FileInputStream fis = new java.io.FileInputStream(pubkeyTsFile)) {
-					pubkeyTs.load(fis, pubkeyTruststorePassword.toCharArray());
-				}
+
+			java.security.KeyStore pubkeyTruststore = Cerificates.getPubKeyTruststore(storePrefix, truststorePassword);
+			if (pubkeyTruststore == null) {
+				Cerificates.storePubKeyTruststore(storePrefix + "-truststore-pubkeys.p12", truststorePassword, new String[]{peerAlias}, new PublicKey[]{peerRSAPublicKey});
 			} else {
-				pubkeyTs.load(null, null);
-			}
-			// Use a unique alias for each peer public key
-			String uniquePeerPubkeyAlias = peerAlias + "-pubkey";
-			java.security.cert.Certificate[] dummyChain = { generateDummySelfSignedCert(new KeyPair(peerRSAPublicKey, myECKeyPair.getPrivate())) };
-			pubkeyTs.setCertificateEntry(uniquePeerPubkeyAlias, dummyChain[0]);
-			try (java.io.FileOutputStream fos = new java.io.FileOutputStream(pubkeyTruststoreFile)) {
-				pubkeyTs.store(fos, pubkeyTruststorePassword.toCharArray());
+				// Generate a self-signed cert for the public key as in Cerificates.storePubKeyTruststore
+				java.security.cert.Certificate pubkeyCert = Cerificates.generateSelfSignedCertificate(new KeyPair(peerRSAPublicKey, Cerificates.generateDeterministicKeyPair("pubkey-temp").getPrivate()), "CN=" + peerAlias + "-pubkey, OU=Org, O=Company, L=City, ST=State, C=PT");
+				pubkeyTruststore.setCertificateEntry(peerAlias + "-pubkey", pubkeyCert);
+				try (java.io.FileOutputStream fos = new java.io.FileOutputStream(storePrefix + "-truststore-pubkeys.p12")) {
+					pubkeyTruststore.store(fos, truststorePassword.toCharArray());
+				}
 			}
 		}
 	}
@@ -299,13 +304,13 @@ public class KeyTransmission {
 	}
 
 	// Helper to read a length-prefixed byte array
-	private static byte[] readBytes(InputStream in) throws Exception {
+	static byte[] readBytes(InputStream in) throws Exception {
 		byte[] lenBytes = in.readNBytes(4);
 		int len = bytesToInt(lenBytes);
 		return in.readNBytes(len);
 	}
 
-	private static byte[] intToBytes(int value) {
+	static byte[] intToBytes(int value) {
 		return new byte[] {
 			(byte)(value >>> 24),
 			(byte)(value >>> 16),
@@ -314,12 +319,13 @@ public class KeyTransmission {
 		};
 	}
 
-	private static int bytesToInt(byte[] bytes) {
+	static int bytesToInt(byte[] bytes) {
 		return ((bytes[0] & 0xFF) << 24) |
 			   ((bytes[1] & 0xFF) << 16) |
 			   ((bytes[2] & 0xFF) << 8) |
 			   (bytes[3] & 0xFF);
 	}
+
 
 	/**
 	 * Loads the EC private key from a PKCS12 keystore with password 'changeit'.
@@ -388,9 +394,5 @@ public class KeyTransmission {
 			.setProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider())
 			.getCertificate(certHolder);
 	}
-
-
-
-    
 
 }

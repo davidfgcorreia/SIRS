@@ -1,0 +1,22 @@
+{
+  "TestCompany": {
+    "ip": "localhost",
+    "port": 5001,
+    "certport": 6001
+  },
+  "Acme Corp": {
+    "ip": "localhost",
+    "port": 8443,
+    "certport": 6100
+  },
+  "Globex": {
+    "ip": "localhost",
+    "port": 8543,
+    "certport": 6200
+  },
+  "Umbrella": {
+    "ip": "localhost",
+    "port": 8643,
+    "certport": 6300
+  }
+}

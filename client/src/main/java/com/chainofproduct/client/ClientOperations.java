@@ -36,11 +36,29 @@ public class ClientOperations {
         }
         this.serverHost = host;
         this.serverPort = port;
+
+        // Ensure server cert/pubkey is present (exchange only once)
+        try {
+            com.chainofproduct.utils.Cerificates.verifyCertificaAndObtain(this.clientName, this.receiverEntity, this.serverHost, this.serverPort);
+        } catch (Exception e) {
+            System.err.println("Certificate verification/exchange with server failed: " + e.getMessage());
+        }
     }
 
     
     // Enqueue a transaction send request (Type 1)
     public void sendtrsaction(String dataFile, String destination) {
+        // Resolve destination info
+        com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = com.chainofproduct.utils.ResolveDestinations.resolve(destination);
+        String partnerHost = destInfo != null ? destInfo.ip : null;
+        int partnerPort = destInfo != null ? destInfo.port : 0;
+        // Ensure receiver cert/pubkey is present
+        try {
+            com.chainofproduct.utils.Cerificates.verifyCertificaAndObtain(this.clientName, destination, partnerHost, partnerPort);
+        } catch (Exception e) {
+            System.err.println("Certificate verification/exchange failed: " + e.getMessage());
+            return;
+        }
         String payload = "{request_type: transaction, source: " + this.clientName + ", destination: " + destination + "}";
         byte[] fileBytes = null;
         java.nio.file.Path path;
@@ -94,9 +112,6 @@ public class ClientOperations {
         } else {
             // Not signed, obtain signatures
             String partnerName = destination;
-            com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = com.chainofproduct.utils.ResolveDestinations.resolve(destination);
-            String partnerHost = destInfo != null ? destInfo.ip : null;
-            int partnerPort = destInfo != null ? destInfo.port : 0;
             String[] signatures = obtainDoubleSignature(fileBytes, partnerHost, partnerPort, partnerName, isSeller);
             if (signatures == null || signatures.length != 2) {
                 System.err.println("Failed to obtain double signature");

@@ -17,6 +17,53 @@ public class Cerificates {
 	static {
 		Security.addProvider(new BouncyCastleProvider());
 	}
+	/**
+	 * Verifies if the receiver's certificate and public key are available in the truststores.
+	 * If not, triggers certificate/key exchange.
+	 * @param myEntityName The name of this entity (client/server)
+	 * @param receiverName The name of the receiver entity (partner)
+	 * @param receiverIp The IP address of the receiver
+	 * @param receiverPort The port of the receiver
+	 * @throws Exception if exchange fails
+	 */
+	public static void verifyCertificaAndObtain(String myEntityName, String receiverName, String receiverIp, int receiverPort) throws Exception {
+		String password = "changeit";
+		boolean certFound = false;
+		boolean pubkeyFound = false;
+		// Check for certificate using new getter
+		KeyStore truststore = getTruststore(myEntityName, password);
+		if (truststore != null) {
+			java.security.cert.Certificate cert = truststore.getCertificate(receiverName);
+			certFound = (cert != null);
+		}
+		// Check for public key using new getter
+		KeyStore pubkeyTs = getPubKeyTruststore(myEntityName, password);
+		if (pubkeyTs != null) {
+			java.security.cert.Certificate pubkeyCert = pubkeyTs.getCertificate(receiverName + "-pubkey");
+			pubkeyFound = (pubkeyCert != null);
+		}
+		if (!certFound || !pubkeyFound) {
+			// Trigger certificate/key exchange
+			System.out.println("Certificate or public key for " + receiverName + " not found. Initiating exchange...");
+			// Load my EC keypair
+			String ecKeystorePath = myEntityName + "-ec-keystore.p12";
+			String ecAlias = myEntityName + "-ec";
+			java.security.KeyPair myECKeyPair = com.chainofproduct.utils.KeyTransmission.generateECKeyPairAndStore(ecAlias, ecKeystorePath, password);
+			// Load my RSA public key and certificate using new getter
+			KeyStore ks = getKeystore(myEntityName, password);
+			if (ks != null) {
+				java.security.cert.Certificate myCert = ks.getCertificate(myEntityName);
+				java.security.PublicKey myRSAPubKey = myCert.getPublicKey();
+				com.chainofproduct.utils.KeyTransmission.sendRSAKeyAndCertWithECDH(
+					myEntityName, myEntityName, receiverName, receiverIp, receiverPort, myECKeyPair, myRSAPubKey, (java.security.cert.X509Certificate)myCert
+				);
+			} else {
+				throw new Exception("Keystore for " + myEntityName + " not found.");
+			}
+		} else {
+			System.out.println("Certificate and public key for " + receiverName + " found in truststores.");
+		}
+	}
 
 	public static void main(String[] args) {
 		if (args.length < 1) {
@@ -39,7 +86,7 @@ public class Cerificates {
 		// Also generate and store EC key pair (no certificate, just for ECDH, etc.)
 		String ecKeystoreFile = entityName + "-ec-keystore.p12";
 		String ecKeystorePassword = "changeit";
-		KeyPair ecKeyPair = com.chainofproduct.utils.KeyTransmission.generateECKeyPairAndStore(entityName + "-ec", ecKeystoreFile, ecKeystorePassword);
+		com.chainofproduct.utils.KeyTransmission.generateECKeyPairAndStore(entityName + "-ec", ecKeystoreFile, ecKeystorePassword);
 		KeyPair keyPair = generateDeterministicKeyPair(entityName);
 		String dn = "CN=" + entityName + ", OU=Org, O=Company, L=City, ST=State, C=PT";
 		X509Certificate cert = generateSelfSignedCertificate(keyPair, dn);
@@ -61,7 +108,7 @@ public class Cerificates {
 	}
 
 	// Deterministic RSA keypair from entity name
-	private static KeyPair generateDeterministicKeyPair(String name) throws Exception {
+	public static KeyPair generateDeterministicKeyPair(String name) throws Exception {
 		KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
 		byte[] seed = name.getBytes(java.nio.charset.StandardCharsets.UTF_8);
 		SecureRandom sr = SecureRandom.getInstance("SHA1PRNG");
@@ -71,7 +118,7 @@ public class Cerificates {
 	}
 
 	// Self-signed X.509 certificate
-	private static X509Certificate generateSelfSignedCertificate(KeyPair keyPair, String dn) throws Exception {
+	public static X509Certificate generateSelfSignedCertificate(KeyPair keyPair, String dn) throws Exception {
 		long now = 1672531200000L; // Fixed notBefore (2023-01-01 UTC)
 		Date from = new Date(now);
 		Date to = new Date(now + 365L * 24 * 60 * 60 * 1000); // 1 year
@@ -94,7 +141,7 @@ public class Cerificates {
 	}
 
 	// Store all public certs in a truststore (except own private key)
-	private static void storeTruststore(String truststorePath, String password, String[] allEntities, X509Certificate[] certs, int selfIdx) throws Exception {
+	public static void storeTruststore(String truststorePath, String password, String[] allEntities, X509Certificate[] certs, int selfIdx) throws Exception {
 		KeyStore ts = KeyStore.getInstance("PKCS12");
 		ts.load(null, null);
 		for (int i = 0; i < allEntities.length; i++) {
@@ -117,6 +164,50 @@ public class Cerificates {
 			ts.store(fos, password.toCharArray());
 		}
 	}
+
+	
+	/**
+	 * Loads and returns the truststore for the given entity.
+	 */
+	public static KeyStore getTruststore(String entityName, String password) throws Exception {
+		String truststorePath = entityName + "-truststore.p12";
+		KeyStore ts = KeyStore.getInstance("PKCS12");
+		java.io.File truststoreFile = new java.io.File(truststorePath);
+		if (!truststoreFile.exists()) return null;
+		try (java.io.FileInputStream fis = new java.io.FileInputStream(truststoreFile)) {
+			ts.load(fis, password.toCharArray());
+		}
+		return ts;
+	}
+
+	/**
+	 * Loads and returns the pubkey truststore for the given entity.
+	 */
+	public static KeyStore getPubKeyTruststore(String entityName, String password) throws Exception {
+		String pubkeyTruststorePath = entityName + "-truststore-pubkeys.p12";
+		KeyStore ts = KeyStore.getInstance("PKCS12");
+		java.io.File pubkeyTruststoreFile = new java.io.File(pubkeyTruststorePath);
+		if (!pubkeyTruststoreFile.exists()) return null;
+		try (java.io.FileInputStream fis = new java.io.FileInputStream(pubkeyTruststoreFile)) {
+			ts.load(fis, password.toCharArray());
+		}
+		return ts;
+	}
+
+	/**
+	 * Loads and returns the keystore for the given entity.
+	 */
+	public static KeyStore getKeystore(String entityName, String password) throws Exception {
+		String keystorePath = entityName + "-keystore.p12";
+		KeyStore ks = KeyStore.getInstance("PKCS12");
+		java.io.File keystoreFile = new java.io.File(keystorePath);
+		if (!keystoreFile.exists()) return null;
+		try (java.io.FileInputStream fis = new java.io.FileInputStream(keystoreFile)) {
+			ks.load(fis, password.toCharArray());
+		}
+		return ks;
+	}
+
 
 
 }
