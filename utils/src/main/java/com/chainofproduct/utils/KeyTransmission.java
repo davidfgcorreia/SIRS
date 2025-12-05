@@ -152,7 +152,7 @@ public class KeyTransmission {
 		String truststorePassword = "changeit";
 		// Store the received peer certificate in our truststore
 		// Always use senderAlias as the truststore alias (matches test expectation)
-		Cerificates.storeTruststore(truststoreFile, truststorePassword, new String[]{senderAlias}, new java.security.cert.X509Certificate[]{(java.security.cert.X509Certificate)peerCert}, 0);
+		Cerificates.storeTruststore(truststoreFile, truststorePassword, new String[]{senderAlias}, new java.security.cert.X509Certificate[]{(java.security.cert.X509Certificate)peerCert});
 
 		String pubkeyTruststoreFile = storePrefix + "-truststore-pubkeys.p12";
 		// Store the received peer public key in our pubkey truststore
@@ -264,7 +264,7 @@ public class KeyTransmission {
 			java.security.KeyStore truststore = Cerificates.getTruststore(storePrefix, truststorePassword);
 			if (truststore == null) {
 				// If truststore doesn't exist, create and store
-				Cerificates.storeTruststore(storePrefix + "-truststore.p12", truststorePassword, new String[]{peerAlias}, new java.security.cert.X509Certificate[]{(java.security.cert.X509Certificate)peerCert}, 0);
+				Cerificates.storeTruststore(storePrefix + "-truststore.p12", truststorePassword, new String[]{peerAlias}, new java.security.cert.X509Certificate[]{(java.security.cert.X509Certificate)peerCert});
 			} else {
 				truststore.setCertificateEntry(peerAlias, (java.security.cert.X509Certificate)peerCert);
 				try (java.io.FileOutputStream fos = new java.io.FileOutputStream(storePrefix + "-truststore.p12")) {

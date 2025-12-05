@@ -96,7 +96,7 @@ public class Cerificates {
 		storeKeyAndCert(keystoreFile, keystorePassword, entityName, keyPair, cert);
 
 		String truststoreFile = entityName + "-truststore.p12";
-		storeTruststore(truststoreFile, keystorePassword, new String[]{entityName}, new X509Certificate[]{cert}, 0);
+		storeTruststore(truststoreFile, keystorePassword, new String[]{entityName}, new X509Certificate[]{cert});
 
 		String pubkeyTruststoreFile = entityName + "-truststore-pubkeys.p12";
 		Cerificates.storePubKeyTruststore(pubkeyTruststoreFile, keystorePassword, new String[]{entityName}, new PublicKey[]{keyPair.getPublic()});
@@ -141,7 +141,7 @@ public class Cerificates {
 	}
 
 	// Store all public certs in a truststore (except own private key)
-	public static void storeTruststore(String truststorePath, String password, String[] allEntities, X509Certificate[] certs, int selfIdx) throws Exception {
+	public static void storeTruststore(String truststorePath, String password, String[] allEntities, X509Certificate[] certs) throws Exception {
 		KeyStore ts = KeyStore.getInstance("PKCS12");
 		ts.load(null, null);
 		for (int i = 0; i < allEntities.length; i++) {
