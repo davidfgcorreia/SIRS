@@ -43,17 +43,91 @@ public class ClientOperations {
     public void sendtrsaction(String dataFile, String destination) {
         String payload = "{request_type: transaction, source: " + this.clientName + ", destination: " + destination + "}";
         byte[] fileBytes = null;
+        java.nio.file.Path path;
         try {
-            java.nio.file.Path path = java.nio.file.Paths.get(dataFile);
+            path = java.nio.file.Paths.get(dataFile);
             fileBytes = java.nio.file.Files.readAllBytes(path);
         } catch (Exception e) {
             System.err.println("Failed to read dataFile as bytes: " + e.getMessage());
             return;
         }
+
+        // Parse JSON to get seller and buyer
+        String fileStr = new String(fileBytes, java.nio.charset.StandardCharsets.UTF_8);
+        int jsonEnd = fileStr.indexOf('}') + 1;
+        if (jsonEnd <= 0) {
+            System.err.println("Invalid transaction file: missing JSON object");
+            return;
+        }
+        String jsonPart = fileStr.substring(0, jsonEnd);
+        String seller = extractJsonStringField(jsonPart, "seller");
+        String buyer = extractJsonStringField(jsonPart, "buyer");
+        if (seller == null || buyer == null) {
+            System.err.println("Transaction JSON missing seller or buyer field");
+            return;
+        }
+        boolean isSeller = this.clientName.equalsIgnoreCase(seller);
+        boolean isBuyer = this.clientName.equalsIgnoreCase(buyer);
+        if (!isSeller && !isBuyer) {
+            System.err.println("Client is neither seller nor buyer, cannot send transaction");
+            return;
+        }
+
+        // Check if file is already double signed: prefer filename, fallback to length/signature check
+        boolean alreadySigned = false;
+        if (dataFile.endsWith("_signed.bin")) {
+            alreadySigned = true;
+        } else {
+            int sigLen = 344; // typical RSA signature length in Base64
+            if (fileBytes.length > sigLen * 2) {
+                String sellerSig = fileStr.substring(fileStr.length() - sigLen * 2, fileStr.length() - sigLen);
+                String buyerSig = fileStr.substring(fileStr.length() - sigLen);
+                if (sellerSig.matches("[A-Za-z0-9+/=]{344}") && buyerSig.matches("[A-Za-z0-9+/=]{344}")) {
+                    alreadySigned = true;
+                }
+            }
+        }
+        byte[] toSend;
+        if (alreadySigned) {
+            // File is already double signed, send as is
+            toSend = fileBytes;
+        } else {
+            // Not signed, obtain signatures
+            String partnerName = destination;
+            com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = com.chainofproduct.utils.ResolveDestinations.resolve(destination);
+            String partnerHost = destInfo != null ? destInfo.ip : null;
+            int partnerPort = destInfo != null ? destInfo.port : 0;
+            String[] signatures = obtainDoubleSignature(fileBytes, partnerHost, partnerPort, partnerName, isSeller);
+            if (signatures == null || signatures.length != 2) {
+                System.err.println("Failed to obtain double signature");
+                return;
+            }
+            // Concatenate file + mySignature + partnerSignature
+            byte[] mySigBytes = signatures[isSeller ? 0 : 1].getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] partnerSigBytes = signatures[isSeller ? 1 : 0].getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            toSend = new byte[fileBytes.length + mySigBytes.length + partnerSigBytes.length];
+            System.arraycopy(fileBytes, 0, toSend, 0, fileBytes.length);
+            System.arraycopy(mySigBytes, 0, toSend, fileBytes.length, mySigBytes.length);
+            System.arraycopy(partnerSigBytes, 0, toSend, fileBytes.length + mySigBytes.length, partnerSigBytes.length);
+
+            // Store signed file in same directory as original, named <transaction_id>_signed.json
+            try {
+                java.nio.file.Path parentDir = path.getParent();
+                // Extract transaction_id from JSON
+                String transactionId = extractJsonStringField(jsonPart, "transaction_id");
+                String signedFileName = transactionId + "_signed.bin";
+                java.nio.file.Path signedPath = parentDir.resolve(signedFileName);
+                java.nio.file.Files.write(signedPath, toSend);
+                System.out.println("Signed transaction file written to: " + signedPath);
+            } catch (Exception e) {
+                System.err.println("Failed to write signed transaction file: " + e.getMessage());
+            }
+        }
+
         byte[] payloadBytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] combined = new byte[payloadBytes.length + fileBytes.length];
+        byte[] combined = new byte[payloadBytes.length + toSend.length];
         System.arraycopy(payloadBytes, 0, combined, 0, payloadBytes.length);
-        System.arraycopy(fileBytes, 0, combined, payloadBytes.length, fileBytes.length);
+        System.arraycopy(toSend, 0, combined, payloadBytes.length, toSend.length);
         Request req = new Request(
             this.serverHost,
             this.serverPort,
@@ -141,139 +215,55 @@ public class ClientOperations {
         System.out.println("Enqueued getRecentTransactions request since timestamp=" + sinceTimestamp);
     }
 
-    /**
-     * Obtains double signature for a transaction based on client's role.
-     * Determines role (seller/buyer) from transaction JSON, then coordinates signatures:
-     * - If seller: signs first, requests buyer's signature
-     * - If buyer: requests seller to sign first, then signs transaction and requests buyer's signature
-     * 
-     * @param transactionData The transaction JSON data containing seller and buyer fields
-     * @param sellerHost The hostname/IP of the seller client
-     * @param sellerPort The port of the seller client
-     * @param buyerHost The hostname/IP of the buyer client
-     * @param buyerPort The port of the buyer client
-     * @return Array with [sellerSignature, buyerSignature], or null if failed
-     */
-    public String[] obtainDoubleSignature(byte[] transactionData, String sellerHost, int sellerPort, String buyerHost, int buyerPort) {
-        try {
-            // Parse transaction data to extract the inner JSON with seller/buyer
-            // Format: {request_type:transaction, ...}<json file with seller/buyer fields>
-            String dataStr = new String(transactionData, java.nio.charset.StandardCharsets.UTF_8);
+
+    public String[] obtainDoubleSignature(byte[] transactionData, String PartnerHost, int PartnerPort,String PartnerName, boolean isSeller) {
+        String mySignature = signTransactionData(transactionData);
+        if (mySignature == null) {
+            System.err.println("Failed to create seller signature");
+            return null;
+        }
+        
+        System.out.println("Seller (" + this.clientName + ") signed transaction");
             
-            // Find where the payload header ends
-            int payloadEnd = dataStr.indexOf('}') + 1;
-            if (payloadEnd <= 0) {
-                System.err.println("Invalid transaction data format: missing payload header");
-                return null;
-            }
-            
-            // Extract the JSON file content (after payload, before signatures if any)
-            String jsonFileStr = dataStr.substring(payloadEnd);
-            
-            // Find the JSON object boundaries in the file content
-            int jsonEnd = jsonFileStr.indexOf('}') + 1;
-            if (jsonEnd <= 0) {
-                System.err.println("Invalid transaction JSON format");
-                return null;
-            }
-            String jsonPart = jsonFileStr.substring(0, jsonEnd);
-            
-            // Extract seller and buyer from the inner JSON
-            String seller = extractFieldValue(jsonPart, "seller");
-            String buyer = extractFieldValue(jsonPart, "buyer");
-            
-            if (seller == null || buyer == null) {
-                System.err.println("Transaction JSON missing seller or buyer field");
-                return null;
-            }
-            
-            // Determine this client's role
-            boolean isSeller = this.clientName.equalsIgnoreCase(seller);
-            boolean isBuyer = this.clientName.equalsIgnoreCase(buyer);
-            
-            if (!isSeller && !isBuyer) {
-                System.err.println("This client is neither seller nor buyer in transaction");
-                return null;
-            }
-            
-            if (isSeller) {
-                // This client is the seller: sign first, then request buyer's signature
-                String sellerSignature = signTransactionData(transactionData);
-                if (sellerSignature == null) {
-                    System.err.println("Failed to create seller signature");
-                    return null;
-                }
-                System.out.println("Seller (" + this.clientName + ") signed transaction");
-                
-                // Request buyer's signature
-                String payload = "{request_type:signatureRequest, source: " + this.clientName + ", sellerSignature: " + sellerSignature + "}";
-                byte[] payloadBytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                byte[] combined = new byte[payloadBytes.length + transactionData.length];
-                System.arraycopy(payloadBytes, 0, combined, 0, payloadBytes.length);
-                System.arraycopy(transactionData, 0, combined, payloadBytes.length, transactionData.length);
-                
-                byte[] responseBytes = com.chainofproduct.utils.ApiCalls.actAsSender(
-                    buyerHost, buyerPort, this.entityType, this.clientNum, buyer, combined
-                );
-                
-                if (responseBytes == null) {
-                    System.err.println("Failed to get buyer signature: no response");
-                    return null;
-                }
-                
-                String response = new String(responseBytes, java.nio.charset.StandardCharsets.UTF_8);
-                String buyerSignature = extractFieldValue(response, "signature");
-                if (buyerSignature == null) {
-                    System.err.println("Failed to get buyer signature: no signature in response");
-                    return null;
-                }
-                
-                System.out.println("Successfully obtained double signature");
-                return new String[]{sellerSignature, buyerSignature};
-                
-            } else {
-                // This client is the buyer: request seller to sign, then forward to buyer and sign
-                String payload = "{request_type:signatureRequest, source: " + this.clientName + "}";
-                byte[] payloadBytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                byte[] combined = new byte[payloadBytes.length + transactionData.length];
-                System.arraycopy(payloadBytes, 0, combined, 0, payloadBytes.length);
-                System.arraycopy(transactionData, 0, combined, payloadBytes.length, transactionData.length);
-                
-                byte[] responseBytes = com.chainofproduct.utils.ApiCalls.actAsSender(
-                    sellerHost, sellerPort, this.entityType, this.clientNum, seller, combined
-                );
-                
-                if (responseBytes == null) {
-                    System.err.println("Failed to get seller signature: no response");
-                    return null;
-                }
-                
-                String response = new String(responseBytes, java.nio.charset.StandardCharsets.UTF_8);
-                String sellerSignature = extractFieldValue(response, "signature");
-                if (sellerSignature == null) {
-                    System.err.println("Failed to get seller signature: no signature in response");
-                    return null;
-                }
-                
-                System.out.println("Received seller signature, now buyer (this client) will sign");
-                
-                // Now this buyer signs the transaction
-                String buyerSignature = signTransactionData(transactionData);
-                if (buyerSignature == null) {
-                    System.err.println("Failed to create buyer signature");
-                    return null;
-                }
-                
-                System.out.println("Successfully obtained double signature");
-                return new String[]{sellerSignature, buyerSignature};
-            }
-            
-        } catch (Exception e) {
+        // Request buyer's signature
+        String payload = "{request_type:signatureRequest, source: " + this.clientName + ", mySignature: " + mySignature + "}";
+        byte[] payloadBytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] combined = new byte[payloadBytes.length + transactionData.length];
+        System.arraycopy(payloadBytes, 0, combined, 0, payloadBytes.length);
+        System.arraycopy(transactionData, 0, combined, payloadBytes.length, transactionData.length);
+        
+        byte[] responseBytes;
+        try{
+            responseBytes = com.chainofproduct.utils.ApiCalls.actAsSender(
+                PartnerHost, PartnerPort, this.entityType, this.clientNum, PartnerName, combined
+            );
+        }
+        catch (Exception e) {
             System.err.println("Double signature error: " + e.getMessage());
             e.printStackTrace();
             return null;
         }
+        
+        if (responseBytes == null) {
+            System.err.println("Failed to get buyer signature: no response");
+            return null;
+        }
+        
+        String response = new String(responseBytes, java.nio.charset.StandardCharsets.UTF_8);
+        String partnerSignature = extractFieldValue(response, "signature");
+        if (partnerSignature == null) {
+            System.err.println("Failed to get buyer signature: no signature in response");
+            return null;
+        }
+        
+        System.out.println("Successfully obtained double signature");
+            
+        return new String[]{mySignature, partnerSignature};
+
+            
+
     }
+    
     
     /**
      * Signs transaction data with this client's private key.
