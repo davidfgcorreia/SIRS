@@ -20,20 +20,23 @@ public class ApiCalls {
 
     // Sender logic: initiates handshake, receives session keys, sends encrypted data
     public static byte[] actAsSender(String host, int port, String entityType, int clientNum, String receiverEntity, byte[] dataFile) throws Exception {
-        // Determine keystore/truststore paths based on entity type
-        String alias, keyStorePath, trustStorePath;
+        String alias;
         if ("client".equalsIgnoreCase(entityType)) {
             alias = "client" + clientNum;
-            keyStorePath = alias + "-keystore.p12";
-            trustStorePath = alias + "-truststore.p12";
         } else if ("server".equalsIgnoreCase(entityType)) {
             alias = "server";
-            keyStorePath = "server-keystore.p12";
-            trustStorePath = "server-truststore.p12";
         } else if ("db".equalsIgnoreCase(entityType)) {
             alias = "db";
-            keyStorePath = "db-keystore.p12";
-            trustStorePath = "db-truststore.p12";
+        } else {
+            throw new IllegalArgumentException("Unknown entity type: " + entityType);
+        }
+
+        if ("client".equalsIgnoreCase(entityType)) {
+            alias = "client" + clientNum;
+        } else if ("server".equalsIgnoreCase(entityType)) {
+            alias = "server";
+        } else if ("db".equalsIgnoreCase(entityType)) {
+            alias = "db";
         } else {
             throw new IllegalArgumentException("Unknown entity type: " + entityType);
         }
@@ -41,26 +44,26 @@ public class ApiCalls {
         String trustStorePassword = "changeit";
         String trustStorePubKeys = "changeit";
 
-        // Load receiver's public RSA key from PKCS12 truststore-pubkeys
-        String pubKeyTruststorePath = receiverEntity + "-truststore-pubkeys.p12";
-        java.security.KeyStore pubKeyStore = java.security.KeyStore.getInstance("PKCS12");
-        try (FileInputStream pubKeyFis = new FileInputStream(pubKeyTruststorePath)) {
-            pubKeyStore.load(pubKeyFis, trustStorePubKeys.toCharArray());
-        }
+        // Load receiver's certificate from truststore
+        java.security.KeyStore certStore = Cerificates.getTruststore(alias, trustStorePassword);
+        if (certStore == null) throw new IOException("Missing truststore for " + alias);
+        java.security.cert.Certificate receiverCert = certStore.getCertificate(receiverEntity);
+        if (receiverCert == null) throw new IOException("Missing certificate for " + receiverEntity + " in truststore");
+
+        // Load receiver's public RSA key from PKCS12 truststore-pubkeys using Cerificates.getPubKeyTruststore
+        java.security.KeyStore pubKeyStore = Cerificates.getPubKeyTruststore(alias, trustStorePubKeys);
+        if (pubKeyStore == null) throw new IOException("Missing pubkey truststore for " + alias);
         java.security.cert.Certificate pubKeyCert = pubKeyStore.getCertificate(receiverEntity + "-pubkey");
+        if (pubKeyCert == null) throw new IOException("Missing public key certificate for " + receiverEntity + "-pubkey in pubkey truststore");
         java.security.PublicKey receiverPubKey = pubKeyCert.getPublicKey();
 
         // Load sender's private and public key from keystore
-        java.security.KeyStore keyStore = java.security.KeyStore.getInstance("PKCS12");
-        try (FileInputStream keyStoreFis = new FileInputStream(keyStorePath)) {
-            keyStore.load(keyStoreFis, keyStorePassword.toCharArray());
-        }
+        java.security.KeyStore keyStore = Cerificates.getKeystore(alias, keyStorePassword);
+        if (keyStore == null) throw new IOException("Missing keystore for " + alias);
         // Load sender's private key from keystore (for TLS mutual auth)
         // Load truststore (for TLS mutual auth)
-        java.security.KeyStore trustStore = java.security.KeyStore.getInstance("PKCS12");
-        try (FileInputStream trustStoreFis = new FileInputStream(trustStorePath)) {
-            trustStore.load(trustStoreFis, trustStorePassword.toCharArray());
-        }
+        java.security.KeyStore trustStore = Cerificates.getTruststore(alias, trustStorePassword);
+        if (trustStore == null) throw new IOException("Missing truststore for " + alias);
 
         javax.net.ssl.KeyManagerFactory kmf = javax.net.ssl.KeyManagerFactory.getInstance("SunX509");
         kmf.init(keyStore, keyStorePassword.toCharArray());
@@ -131,8 +134,9 @@ public class ApiCalls {
                     terminateAck = null;
                 }
                 if ("TERMINATE_ACK".equals(terminateAck)) {
-                    System.out.println("Session terminated by server.");
+                    System.out.println("[API] Session terminated by server.");
                 }
+                System.out.println("[API] actAsSender: Finished.");
                 return null;
             } else {
                 result = serverMsg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -145,8 +149,9 @@ public class ApiCalls {
                     terminateAck = null;
                 }
                 if ("TERMINATE_ACK".equals(terminateAck)) {
-                    System.out.println("Session terminated after query.");
+                    // System.out.println("[API] Session terminated after query.");
                 }
+                // System.out.println("[API] actAsSender: Finished.");
             }
         } catch (Exception e) {
             System.err.println("[SECURITY] Error in actAsSender: " + e.getMessage());
@@ -190,13 +195,12 @@ public class ApiCalls {
                 }
             }
         }
-        if (alias == null) alias = "server"; // fallback for non-SSL or unknown, default to server
-        String keyStorePath = alias + "-keystore.p12";
-        String keyStorePassword = "changeit";
-        java.security.KeyStore keyStore = java.security.KeyStore.getInstance("PKCS12");
-        try (FileInputStream keyStoreFis = new FileInputStream(keyStorePath)) {
-            keyStore.load(keyStoreFis, keyStorePassword.toCharArray());
+        if (alias == null) {
+            alias = "server"; // fallback for non-SSL or unknown, default to server
         }
+        String keyStorePassword = "changeit";
+        java.security.KeyStore keyStore = Cerificates.getKeystore(alias, keyStorePassword);
+        if (keyStore == null) throw new IOException("Missing keystore for " + alias);
         java.security.PrivateKey privateKey = (java.security.PrivateKey) keyStore.getKey(alias, keyStorePassword.toCharArray());
         try (DataInputStream in = new DataInputStream(socket.getInputStream());
              DataOutputStream out = new DataOutputStream(socket.getOutputStream())) {
@@ -235,6 +239,7 @@ public class ApiCalls {
             try {
                 payload = CryptoUtils.decrypt(encryptedPayload, sessionKey, 5 * 60 * 1000);
             } catch (Exception e) {
+                System.err.println("[SECURITY] Decryption failed in handleClient: " + e.getMessage());
                 throw new SecurityException("Decryption failed in handleClient: " + e.getMessage(), e);
             }
             // Call server executor
@@ -243,6 +248,7 @@ public class ApiCalls {
             try {
                 encryptedResp = CryptoUtils.encrypt(response == null ? "TERMINATE".getBytes(java.nio.charset.StandardCharsets.UTF_8) : response, sessionKey);
             } catch (Exception e) {
+                System.err.println("[SECURITY] Encryption failed in handleClient: " + e.getMessage());
                 throw new SecurityException("Encryption failed in handleClient: " + e.getMessage(), e);
             }
             out.writeInt(encryptedResp.length);
@@ -268,6 +274,4 @@ public class ApiCalls {
             try { socket.close(); } catch (Exception ignore) {}
         }
     }
-
-// (Old unreachable code removed)
 }
