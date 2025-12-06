@@ -21,21 +21,14 @@ public class ClientOperations {
         this.entityType = "client";
         this.clientNum = parseClientNum(clientName);
         this.receiverEntity = "server";
-        String host = null;
-        int port = 0;
+        com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = null;
         try {
-            java.nio.file.Path infoPath = java.nio.file.Paths.get("localization_info/server_info.json");
-            String json = new String(java.nio.file.Files.readAllBytes(infoPath), java.nio.charset.StandardCharsets.UTF_8);
-            host = extractJsonStringField(json, "ip");
-            String portStr = extractJsonStringField(json, "port");
-            if (portStr != null && !portStr.isEmpty()) {
-                port = Integer.parseInt(portStr);
-            }
+            destInfo = com.chainofproduct.utils.ResolveDestinations.resolve("server");
         } catch (Exception e) {
             System.err.println("Failed to load server info from localizationinfo/serverinfo.json: " + e.getMessage());
         }
-        this.serverHost = host;
-        this.serverPort = port;
+        this.serverHost = destInfo.ip;
+        this.serverPort = destInfo.port;
 
         // Ensure server cert/pubkey is present (exchange only once)
         try {
@@ -86,72 +79,116 @@ public class ClientOperations {
         }
         boolean isSeller = this.clientName.equalsIgnoreCase(seller);
         boolean isBuyer = this.clientName.equalsIgnoreCase(buyer);
+        System.out.println("[sendtrsaction] BEGIN");
+        System.out.println("[sendtrsaction] dataFile: " + dataFile);
+        System.out.println("[sendtrsaction] destination: " + destination);
+        System.out.println("[sendtrsaction] BEGIN");
+        System.out.println("[sendtrsaction] dataFile: " + dataFile);
+        System.out.println("[sendtrsaction] destination: " + destination);
         if (!isSeller && !isBuyer) {
             System.err.println("Client is neither seller nor buyer, cannot send transaction");
+            System.out.println("[sendtrsaction] partnerHost: " + partnerHost + ", partnerPort: " + partnerPort);
+            System.out.println("[sendtrsaction] partnerHost: " + partnerHost + ", partnerPort: " + partnerPort);
             return;
         }
 
         // Check if file is already double signed: prefer filename, fallback to length/signature check
         boolean alreadySigned = false;
+                System.out.println("[sendtrsaction] Read fileBytes, length: " + (fileBytes != null ? fileBytes.length : -1));
         if (dataFile.endsWith("_signed.bin")) {
+                System.out.println("[sendtrsaction] Read fileBytes, length: " + (fileBytes != null ? fileBytes.length : -1));
             alreadySigned = true;
         } else {
             int sigLen = 344; // typical RSA signature length in Base64
+            System.out.println("[sendtrsaction] fileStr: " + fileStr);
             if (fileBytes.length > sigLen * 2) {
+            System.out.println("[sendtrsaction] jsonEnd: " + jsonEnd);
                 String sellerSig = fileStr.substring(fileStr.length() - sigLen * 2, fileStr.length() - sigLen);
                 String buyerSig = fileStr.substring(fileStr.length() - sigLen);
+            System.out.println("[sendtrsaction] fileStr: " + fileStr);
                 if (sellerSig.matches("[A-Za-z0-9+/=]{344}") && buyerSig.matches("[A-Za-z0-9+/=]{344}")) {
+            System.out.println("[sendtrsaction] jsonEnd: " + jsonEnd);
+            System.out.println("[sendtrsaction] jsonPart: " + jsonPart);
                     alreadySigned = true;
                 }
+            System.out.println("[sendtrsaction] seller: " + seller + ", buyer: " + buyer);
             }
         }
+                System.err.println("[sendtrsaction] seller or buyer is null");
         byte[] toSend;
+            System.out.println("[sendtrsaction] jsonPart: " + jsonPart);
         if (alreadySigned) {
             // File is already double signed, send as is
+            System.out.println("[sendtrsaction] isSeller: " + isSeller + ", isBuyer: " + isBuyer);
+            System.out.println("[sendtrsaction] seller: " + seller + ", buyer: " + buyer);
             toSend = fileBytes;
+                System.err.println("[sendtrsaction] clientName: " + this.clientName);
         } else {
+                System.err.println("[sendtrsaction] seller or buyer is null");
             // Not signed, obtain signatures
             String partnerName = destination;
             String[] signatures = obtainDoubleSignature(fileBytes, partnerHost, partnerPort, partnerName, isSeller);
             if (signatures == null || signatures.length != 2) {
+                System.out.println("[sendtrsaction] File ends with _signed.bin, alreadySigned = true");
+            System.out.println("[sendtrsaction] isSeller: " + isSeller + ", isBuyer: " + isBuyer);
                 System.err.println("Failed to obtain double signature");
                 return;
             }
+                System.out.println("[sendtrsaction] my: " + signatures[0]);
+                System.out.println("[sendtrsaction] partner: " + signatures[1]);
             // Concatenate file + mySignature + partnerSignature
             byte[] mySigBytes = signatures[isSeller ? 0 : 1].getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            System.out.println("[sendtrsaction] Both signatures match expected format, alreadySigned = true");
             byte[] partnerSigBytes = signatures[isSeller ? 1 : 0].getBytes(java.nio.charset.StandardCharsets.UTF_8);
             toSend = new byte[fileBytes.length + mySigBytes.length + partnerSigBytes.length];
             System.arraycopy(fileBytes, 0, toSend, 0, fileBytes.length);
+                System.out.println("[sendtrsaction] File ends with _signed.bin, alreadySigned = true");
             System.arraycopy(mySigBytes, 0, toSend, fileBytes.length, mySigBytes.length);
             System.arraycopy(partnerSigBytes, 0, toSend, fileBytes.length + mySigBytes.length, partnerSigBytes.length);
+                System.out.println("[sendtrsaction] Sending already double signed file, length: " + toSend.length);
 
             // Store signed file in same directory as original, named <transaction_id>_signed.json
+                System.out.println("[sendtrsaction] Obtaining double signature for partnerName: " + partnerName);
             try {
+                System.out.println("[sendtrsaction] obtainDoubleSignature returned: " + (signatures == null ? "null" : java.util.Arrays.toString(signatures)));
+                    System.out.println("[sendtrsaction] my: " + signatures[0]);
+                    System.out.println("[sendtrsaction] partner: " + signatures[1]);
+                    System.err.println("[sendtrsaction] signatures null or length != 2");
                 java.nio.file.Path parentDir = path.getParent();
                 // Extract transaction_id from JSON
+                        System.out.println("[sendtrsaction] Both signatures match expected format, alreadySigned = true");
                 String transactionId = extractJsonStringField(jsonPart, "transaction_id");
+                System.out.println("[sendtrsaction] mySigBytes length: " + mySigBytes.length);
+                System.out.println("[sendtrsaction] partnerSigBytes length: " + partnerSigBytes.length);
                 String signedFileName = transactionId + "_signed.bin";
                 java.nio.file.Path signedPath = parentDir.resolve(signedFileName);
                 java.nio.file.Files.write(signedPath, toSend);
                 System.out.println("Signed transaction file written to: " + signedPath);
+                System.out.println("[sendtrsaction] toSend length: " + toSend.length);
             } catch (Exception e) {
+                System.out.println("[sendtrsaction] Sending already double signed file, length: " + toSend.length);
                 System.err.println("Failed to write signed transaction file: " + e.getMessage());
             }
+                System.out.println("[sendtrsaction] Obtaining double signature for partnerName: " + partnerName);
         }
 
         byte[] payloadBytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        System.err.println("[sendtrsaction] signatures null or length != 2");
         byte[] combined = new byte[payloadBytes.length + toSend.length];
         System.arraycopy(payloadBytes, 0, combined, 0, payloadBytes.length);
         System.arraycopy(toSend, 0, combined, payloadBytes.length, toSend.length);
+        System.out.println("[sendtrsaction] payloadBytes length: " + payloadBytes.length);
         Request req = new Request(
             this.serverHost,
             this.serverPort,
             this.entityType,
-            this.clientNum,
+            this.clientNum, // int, matches Request constructor
             this.receiverEntity,
             combined
         );
+            System.out.println("[sendtrsaction] Request created: host=" + this.serverHost + ", port=" + this.serverPort + ", entityType=" + this.entityType + ", clientNum=" + this.clientNum + ", receiverEntity=" + this.receiverEntity + ", combined.length=" + combined.length);
         enqueueRequest(req);
+            System.out.println("[sendtrsaction] END");
         System.out.println("Enqueued transaction send request for " + destination);
     }
 
@@ -172,7 +209,9 @@ public class ClientOperations {
 
     // Enqueue a getAll request (Type 4)
     public void getAll() {
+        System.out.println("[sendtrsaction] Request created: host=" + this.serverHost + ", port=" + this.serverPort + ", entityType=" + this.entityType + ", clientNum=" + this.clientNum + ", receiverEntity=" + this.receiverEntity );
         String payload = "{request_type:getAll, servername: " + this.clientName + "}";
+        System.out.println("[sendtrsaction] END");
         Request req = new Request(
             this.serverHost,
             this.serverPort,
@@ -286,7 +325,7 @@ public class ClientOperations {
      * @param transactionData The transaction data to sign
      * @return The signature in Base64 format, or null if signing failed
      */
-    private String signTransactionData(byte[] transactionData) {
+    protected String signTransactionData(byte[] transactionData) {
         try {
             java.security.PrivateKey myPrivateKey = loadPrivateKeyFromKeystore(
                 "client" + this.clientNum + "-keystore.p12",
@@ -451,21 +490,8 @@ public class ClientOperations {
 
 
     // Helper to load a public key from PKCS12 truststore-pubkeys
-    private java.security.PublicKey loadPublicKeyFromTruststore(String truststorePath, String alias, String password) throws Exception {
+    protected java.security.PublicKey loadPublicKeyFromTruststore(String truststorePath, String alias, String password) throws Exception {
         try (java.io.FileInputStream fis = new java.io.FileInputStream(truststorePath)) {
-            java.security.KeyStore ks = java.security.KeyStore.getInstance("PKCS12");
-            ks.load(fis, password.toCharArray());
-            java.security.cert.Certificate cert = ks.getCertificate(alias);
-            if (cert == null) {
-                throw new java.security.KeyStoreException("No certificate found for alias: " + alias);
-            }
-            return cert.getPublicKey();
-        }
-    }
-
-    // Helper to load a public key from PKCS12 keystore (gets the public part of the key pair)
-    private java.security.PublicKey loadPublicKeyFromKeystore(String keystorePath, String alias, String password) throws Exception {
-        try (java.io.FileInputStream fis = new java.io.FileInputStream(keystorePath)) {
             java.security.KeyStore ks = java.security.KeyStore.getInstance("PKCS12");
             ks.load(fis, password.toCharArray());
             java.security.cert.Certificate cert = ks.getCertificate(alias);
