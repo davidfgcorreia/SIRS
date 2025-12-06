@@ -29,10 +29,59 @@ public class ClientOperations {
         }
         this.serverHost = destInfo.ip;
         this.serverPort = destInfo.port;
+        
+        
+
 
         // Ensure server cert/pubkey is present (exchange only once)
         try {
-            com.chainofproduct.utils.Cerificates.verifyCertificaAndObtain(this.clientName, this.receiverEntity, this.serverHost, this.serverPort);
+            // 1. Generate/load EC keypair for this client
+            String ecKeystorePath = this.clientName + "-ec-keystore.p12";
+            String ecAlias = this.clientName + "-ec";
+            String ecPassword = "changeit";
+            java.security.KeyPair ecKeyPair;
+            java.io.File ecKeystoreFile = new java.io.File(ecKeystorePath);
+            if (ecKeystoreFile.exists()) {
+                try {
+                    java.security.PrivateKey priv = com.chainofproduct.utils.KeyTransmission.getMyECPrivateKey(ecKeystorePath, ecAlias);
+                    java.security.KeyStore ks = java.security.KeyStore.getInstance("PKCS12");
+                    try (java.io.FileInputStream fis = new java.io.FileInputStream(ecKeystorePath)) {
+                        ks.load(fis, ecPassword.toCharArray());
+                    }
+                    java.security.PublicKey pub = ks.getCertificate(ecAlias).getPublicKey();
+                    ecKeyPair = new java.security.KeyPair(pub, priv);
+                } catch (Exception e) {
+                    System.err.println("Error loading EC keypair, regenerating: " + e.getMessage());
+                    ecKeyPair = com.chainofproduct.utils.KeyTransmission.generateECKeyPairAndStore(ecAlias, ecKeystorePath, ecPassword);
+                }
+            } else {
+                ecKeyPair = com.chainofproduct.utils.KeyTransmission.generateECKeyPairAndStore(ecAlias, ecKeystorePath, ecPassword);
+            }
+
+            // 2. Load this client's RSA public key and certificate
+            String myKeystorePath = this.clientName + "-keystore.p12";
+            String myKeystorePassword = "changeit";
+            java.security.KeyStore myKeystore = com.chainofproduct.utils.Cerificates.getKeystore(this.clientName, myKeystorePassword);
+            if (myKeystore == null) {
+                throw new java.io.FileNotFoundException("Keystore not found: " + myKeystorePath);
+            }
+            java.security.cert.Certificate myCert = myKeystore.getCertificate(this.clientName);
+            if (myCert == null) {
+                throw new java.security.cert.CertificateException("No certificate found for alias: " + this.clientName);
+            }
+            java.security.PublicKey myRSAPubKey = myCert.getPublicKey();
+
+            // 3. Call sendRSAKeyAndCertWithECDH to the server
+            com.chainofproduct.utils.KeyTransmission.sendRSAKeyAndCertWithECDH(
+                this.clientName, // storePrefix
+                this.clientName, // myAlias
+                this.receiverEntity, // peerAlias (server)
+                this.serverHost,
+                (destInfo != null && destInfo.certPort != 0) ? destInfo.certPort : (this.serverPort + 1000), // Use certPort if available, else fallback
+                ecKeyPair,
+                myRSAPubKey,
+                (java.security.cert.X509Certificate) myCert
+            );
         } catch (Exception e) {
             System.err.println("Certificate verification/exchange with server failed: " + e.getMessage());
         }
@@ -44,7 +93,7 @@ public class ClientOperations {
         // Resolve destination info
         com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = com.chainofproduct.utils.ResolveDestinations.resolve(destination);
         String partnerHost = destInfo != null ? destInfo.ip : null;
-        int partnerPort = destInfo != null ? destInfo.port : 0;
+        int partnerPort = destInfo != null ? destInfo.signaturePort : 0;
         // Ensure receiver cert/pubkey is present
         try {
             com.chainofproduct.utils.Cerificates.verifyCertificaAndObtain(this.clientName, destination, partnerHost, partnerPort);
@@ -52,7 +101,7 @@ public class ClientOperations {
             System.err.println("Certificate verification/exchange failed: " + e.getMessage());
             return;
         }
-        String payload = "{request_type: transaction, source: " + this.clientName + ", destination: " + destination + "}";
+        String payload; // Will be set after isSeller/isBuyer are determined
         byte[] fileBytes = null;
         java.nio.file.Path path;
         try {
@@ -79,6 +128,9 @@ public class ClientOperations {
         }
         boolean isSeller = this.clientName.equalsIgnoreCase(seller);
         boolean isBuyer = this.clientName.equalsIgnoreCase(buyer);
+        // Now that isSeller and isBuyer are defined, set the payload with role
+        String role = isSeller ? "seller" : (isBuyer ? "buyer" : "unknown");
+        payload = "{request_type: transaction, source: " + this.clientName + ", destination: " + destination + ", role: " + role + "}";
         System.out.println("[sendtrsaction] BEGIN");
         System.out.println("[sendtrsaction] dataFile: " + dataFile);
         System.out.println("[sendtrsaction] destination: " + destination);
@@ -280,7 +332,9 @@ public class ClientOperations {
         System.out.println("Seller (" + this.clientName + ") signed transaction");
             
         // Request buyer's signature
-        String payload = "{request_type:signatureRequest, source: " + this.clientName + ", mySignature: " + mySignature + "}";
+        // Add role field to signatureRequest payload
+        String role = isSeller ? "seller" : "buyer";
+        String payload = "{request_type:signatureRequest, source: " + this.clientName + ", mySignature: " + mySignature + ", role: " + role + "}";
         byte[] payloadBytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         byte[] combined = new byte[payloadBytes.length + transactionData.length];
         System.arraycopy(payloadBytes, 0, combined, 0, payloadBytes.length);
@@ -361,32 +415,54 @@ public class ClientOperations {
     public byte[] handleSignatureRequest(byte[] requestBytes) {
         try {
             String requestStr = new String(requestBytes, java.nio.charset.StandardCharsets.UTF_8);
-            
             String sourceName = extractFieldValue(requestStr, "source");
-            
             if (sourceName == null) {
                 System.err.println("handleSignatureRequest: Missing source");
                 return null;
             }
-            
             int payloadEnd = requestStr.indexOf('}') + 1;
             if (payloadEnd >= requestBytes.length) {
                 System.err.println("handleSignatureRequest: No transaction data in request");
                 return null;
             }
-            
             byte[] transactionData = new byte[requestBytes.length - payloadEnd];
             System.arraycopy(requestBytes, payloadEnd, transactionData, 0, transactionData.length);
-            
             String mySignature = signTransactionData(transactionData);
             if (mySignature == null) {
                 System.err.println("handleSignatureRequest: Failed to sign transaction");
                 return null;
             }
-            
+
+            // Try to extract the transaction_id from the transactionData (assume it's JSON)
+            String txJson = new String(transactionData, java.nio.charset.StandardCharsets.UTF_8);
+            int jsonEnd = txJson.indexOf('}') + 1;
+            String jsonPart = jsonEnd > 0 ? txJson.substring(0, jsonEnd) : txJson;
+            String transactionId = extractJsonStringField(jsonPart, "transaction_id");
+            if (transactionId == null) transactionId = "unknown";
+
+            // Formulate the double-signed file: transactionData + source signature + my signature
+            // The source's signature is in the request (mySignature param), so extract it
+            String sourceSignature = extractFieldValue(requestStr, "mySignature");
+            if (sourceSignature == null) sourceSignature = "";
+            // Compose the signed file: transactionData + sourceSignature + mySignature
+            byte[] sourceSigBytes = sourceSignature.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] mySigBytes = mySignature.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] signedFile = new byte[transactionData.length + sourceSigBytes.length + mySigBytes.length];
+            System.arraycopy(transactionData, 0, signedFile, 0, transactionData.length);
+            System.arraycopy(sourceSigBytes, 0, signedFile, transactionData.length, sourceSigBytes.length);
+            System.arraycopy(mySigBytes, 0, signedFile, transactionData.length + sourceSigBytes.length, mySigBytes.length);
+
+            // Store the signed file in the current directory as <transaction_id>_signed.bin
+            try {
+                java.nio.file.Path signedPath = java.nio.file.Paths.get(transactionId + "_signed.bin");
+                java.nio.file.Files.write(signedPath, signedFile);
+                System.out.println("[handleSignatureRequest] Signed transaction file written to: " + signedPath);
+            } catch (Exception e) {
+                System.err.println("[handleSignatureRequest] Failed to write signed transaction file: " + e.getMessage());
+            }
+
             String response = "{signature: " + mySignature + "}";
             return response.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            
         } catch (Exception e) {
             System.err.println("Error handling signature request: " + e.getMessage());
             e.printStackTrace();

@@ -11,13 +11,17 @@ import java.security.spec.X509EncodedKeySpec;
 
 public class KeyTransmission {
 
-		public static boolean VERBOSE = true;
+	// Default constructor
+	public KeyTransmission() {
+	}
+
+	public static boolean VERBOSE = true;
 			/**
 			 * Ensures EC keypair exists for the given storePrefix, then starts the key exchange listener.
 			 * @param storePrefix Prefix for truststore and EC keystore file names
 			 * @param listenPort Port to listen on
 			 */
-			public static void ensureECKeyAndStartListener(String storePrefix, int listenPort) throws Exception {
+			public void ensureECKeyAndStartListener(String storePrefix, int listenPort) throws Exception {
 				String ecKeystorePath = storePrefix + "-ec-keystore.p12";
 				String ecAlias = storePrefix + "-ec";
 				String ecPassword = "changeit";
@@ -39,11 +43,11 @@ public class KeyTransmission {
 				} else {
 					ecKeyPair = generateECKeyPairAndStore(ecAlias, ecKeystorePath, ecPassword);
 				}
-				startKeyExchangeListener(storePrefix, listenPort, ecKeyPair);
+				this.startKeyExchangeListener(storePrefix, listenPort, ecKeyPair);
 			}
 		// Soft shutdown flag for the key exchange listener
-		private static final java.util.concurrent.atomic.AtomicBoolean listenerRunning = new java.util.concurrent.atomic.AtomicBoolean(false);
-		private static java.net.ServerSocket listenerSocket = null;
+		private final java.util.concurrent.atomic.AtomicBoolean listenerRunning = new java.util.concurrent.atomic.AtomicBoolean(false);
+		private java.net.ServerSocket listenerSocket = null;
 
 		/**
 		 * Starts a listening channel for key exchange requests on the specified port.
@@ -53,7 +57,7 @@ public class KeyTransmission {
 		 * @param listenPort Port to listen on
 		 * @param myECKeyPair Your EC keypair for ECDH
 		 */
-		public static void startKeyExchangeListener(String storePrefix, int listenPort, KeyPair myECKeyPair) throws Exception {
+		public  void startKeyExchangeListener(String storePrefix, int listenPort, KeyPair myECKeyPair) throws Exception {
 			listenerRunning.set(true);
 			listenerSocket = new java.net.ServerSocket(listenPort);
 			if (VERBOSE) System.out.println("[KeyExchange] Listener started on port " + listenPort);
@@ -101,14 +105,14 @@ public class KeyTransmission {
 		/**
 		 * Softly shuts down the key exchange listener.
 		 */
-		public static void closeKeyExchangeListener() {
+		public void closeKeyExchangeListener() {
 			listenerRunning.set(false);
-			try {
-				if (listenerSocket != null && !listenerSocket.isClosed()) {
+			if (listenerSocket != null && !listenerSocket.isClosed()) {
+				try {
 					listenerSocket.close();
+				} catch (Exception e) {
+					System.err.println("Error closing listener socket: " + e.getMessage());
 				}
-			} catch (Exception e) {
-				if (VERBOSE) System.err.println("Error closing key exchange listener: " + e.getMessage());
 			}
 		}
 	/**

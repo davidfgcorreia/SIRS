@@ -34,7 +34,7 @@ public class ClientOperationsTest {
 
         // Mock ResolveDestinations.resolve to return a dummy DestinationInfo
         com.chainofproduct.utils.ResolveDestinations.DestinationInfo mockDestInfo =
-            new com.chainofproduct.utils.ResolveDestinations.DestinationInfo("127.0.0.1", 12345);
+            new com.chainofproduct.utils.ResolveDestinations.DestinationInfo("127.0.0.1", 12345, 13345, 14345);
         mockStatic(com.chainofproduct.utils.ResolveDestinations.class);
         when(com.chainofproduct.utils.ResolveDestinations.resolve(anyString())).thenReturn(mockDestInfo);
 

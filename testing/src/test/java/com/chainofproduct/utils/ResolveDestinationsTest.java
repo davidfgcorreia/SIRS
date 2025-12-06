@@ -11,5 +11,10 @@ public class ResolveDestinationsTest {
         assertNotNull("DestinationInfo should not be null", info);
         assertEquals("IP should be localhost", "localhost", info.ip);
         assertEquals("Port should be 5001", 5001, info.port);
+        // If certPort is present in the JSON, check its value; otherwise, check the default
+        int expectedCertPort = 6001; // If your JSON has certPort, set this accordingly; else, port+1000
+        assertEquals("certPort should be 6001 (or port+1000)", expectedCertPort, info.certPort);
+        int expectedSignaturePort = 7001; // If your JSON has signaturePort, set this accordingly; else, port+2000
+        assertEquals("signaturePort should be 7001 (or port+2000)", expectedSignaturePort, info.signaturePort);
     }
 }
