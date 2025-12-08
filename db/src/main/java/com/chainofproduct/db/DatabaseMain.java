@@ -1,7 +1,9 @@
 package com.chainofproduct.db;
 
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.security.KeyStore;
+import java.sql.SQLException;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -10,12 +12,19 @@ import com.chainofproduct.utils.ApiCalls;
 
 public class DatabaseMain {
 
+  private static final int TLS_PORT = 6767;
+  private static final String KEYSTORE = "db-keystore.p12";
+  private static final String KEYSTORE_PASSWORD = "changeit";
+
   public static void main(String[] args) {
 
-    final int TLS_PORT = 5432;
-    final String KEYSTORE = "db-keystore.p12";
-    final String KEYSTORE_PASSWORD = "changeit";
-
+    try {
+      DatabaseInitializer.initializeDatabase();
+    } catch (SQLException | IOException e) {
+      System.err.println("Error initializing database: " + e.getMessage());
+      e.printStackTrace();
+    }
+    // TODO: add a way to decide to populate or not the db
     try {
 
       KeyStore ks = KeyStore.getInstance("p12");
@@ -30,7 +39,7 @@ public class DatabaseMain {
       javax.net.ssl.SSLServerSocketFactory ssf = sslContext.getServerSocketFactory();
       javax.net.ssl.SSLServerSocket serverSocket = (javax.net.ssl.SSLServerSocket) ssf.createServerSocket(TLS_PORT);
 
-      System.out.println("API Server listening on port " + TLS_PORT + " (TLS)");
+      System.out.println("DB Server listening on port " + TLS_PORT + " (TLS)");
       java.util.concurrent.ExecutorService receiverPool = java.util.concurrent.Executors.newFixedThreadPool(10);
       while (true) {
         final javax.net.ssl.SSLSocket socket = (javax.net.ssl.SSLSocket) serverSocket.accept();

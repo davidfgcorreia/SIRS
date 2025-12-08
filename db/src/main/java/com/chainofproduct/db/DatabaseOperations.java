@@ -5,20 +5,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class DatabaseOperations {
-  private static final String DB_URL = "jdbc:postgresql://localhost:5432/server-name";
-  private static final String ADMIN_USER = "server-name";
-  private static final String ADMIN_PASSWORD = "password";
-
-  // Server identity - should be configured based on which server this is
-  private static String SERVER_NAME = "Lays Chips"; // Default, should be configurable
-
-  public static void setServerName(String name) {
-    SERVER_NAME = name;
-  }
-
-  public static String getServerName() {
-    return SERVER_NAME;
-  }
+  private static final String DB_URL = "jdbc:postgresql://localhost:5432/ChainOfProduct";
+  private static final String ADMIN_USER = "ChainOfProduct_admin";
+  private static final String ADMIN_PASSWORD = "TheMostSecurePasswordInTheHistoryOfPasswords";
 
   public static void insertTransaction(long id, long timestamp, String seller, String buyer, byte[] raw_file)
       throws SQLException {

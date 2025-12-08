@@ -75,10 +75,12 @@ public class ServerExecutorImpl implements ServerExecutor {
         buyer = json.get("buyer").asText();
         try {
           DatabaseOperations.insertTransaction(id, timestamp, seller, buyer, binaryData);
+          return null;
         } catch (SQLException e) {
-          // do something
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
-        return null;
 
       case 1:
         transactionId = json.get("transactionId").asInt();
@@ -86,11 +88,12 @@ public class ServerExecutorImpl implements ServerExecutor {
         sharedBy = json.get("sharedBy").asText();
         try {
           DatabaseOperations.addShare(transactionId, share, sharedBy);
+          return null;
         } catch (SQLException e) {
-          // do something
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
-
-        return null;
 
       case 2:
         transactionId = json.get("transactionId").asInt();
@@ -98,9 +101,10 @@ public class ServerExecutorImpl implements ServerExecutor {
           List<String> shares = DatabaseOperations.getShares(transactionId);
           return mapper.writeValueAsBytes(shares);
         } catch (SQLException e) {
-          // do smoething
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
-        break;
 
       case 3:
         transactionId = json.get("transactionId").asInt();
@@ -109,18 +113,20 @@ public class ServerExecutorImpl implements ServerExecutor {
           List<String> shares = DatabaseOperations.getSharesBySharedBy(transactionId, sharedBy);
           return mapper.writeValueAsBytes(shares);
         } catch (SQLException e) {
-          // do something
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
-        break;
 
       case 4:
         try {
           List<TransactionRecord> transactions = DatabaseOperations.getAllTransactions();
           return mapper.writeValueAsBytes(transactions);
         } catch (SQLException e) {
-          // do something
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
-        break;
 
       case 5:
         id = json.get("id").asInt();
@@ -128,9 +134,10 @@ public class ServerExecutorImpl implements ServerExecutor {
           TransactionRecord transactions = DatabaseOperations.getTransactionById(id);
           return mapper.writeValueAsBytes(transactions);
         } catch (SQLException e) {
-          // do something
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
-        break;
 
       case 6:
         companyName = json.get("companyName").asText();
@@ -138,37 +145,29 @@ public class ServerExecutorImpl implements ServerExecutor {
           DestinationInfo destination = DatabaseOperations.getDestinationInfo(companyName);
           return mapper.writeValueAsBytes(destination);
         } catch (SQLException e) {
-          // do something
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
-        break;
 
       case 7:
-        companyName = json.get("companyName").asText();
-        try {
-          DestinationInfo destination = DatabaseOperations.getDestinationInfo(companyName);
-          return mapper.writeValueAsBytes(destination);
-        } catch (SQLException e) {
-          // do something
-        }
-        break;
-
-      case 8:
         companyName = json.get("companyName").asText();
         ip = json.get("ip").asText();
         port = json.get("port").asInt();
         publicKey = json.get("publicKey").asText();
         try {
           DatabaseOperations.addDestination(companyName, ip, port, publicKey);
+          return null;
         } catch (SQLException e) {
-          // do something
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
-
-        return null;
 
       default:
         // unrecognizable command (sql)
-        break;
+        System.err.println("unrecognizable command");
+        return "unrecognizable command".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
-    return null; // TODO: needs to give a error of op not found
   }
 }
