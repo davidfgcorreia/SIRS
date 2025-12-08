@@ -86,7 +86,7 @@ public class ClientOperationsTest {
         };
 
         // Use the correct buyer as the destination
-        mockOps.sendtrsaction(tempFile.toString(), "server");
+        mockOps.sendtrsaction(tempFile.toString(), "someotherClinet");
         assertFalse(requestList.isEmpty());
         Request req = requestList.get(0);
         // Assert all fields of the Request object
@@ -100,7 +100,7 @@ public class ClientOperationsTest {
         String payload = new String(req.getDataFile(), java.nio.charset.StandardCharsets.UTF_8);
         System.out.println("[testSendTransaction] Payload: " + payload);
         assertTrue(payload.startsWith("{request_type: transaction"));
-        assertTrue(payload.contains("destination: server"));
+        assertTrue(payload.contains("destination: someotherClinet"));
         // Assert both signatures are present
         assertTrue(payload.contains("my_signature:mysig"));
         assertTrue(payload.contains("partner_signature:partnersig"));

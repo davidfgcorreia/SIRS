@@ -90,17 +90,9 @@ public class ClientOperations {
     
     // Enqueue a transaction send request (Type 1)
     public void sendtrsaction(String dataFile, String destination) {
+
+        System.out.println("[sendtrsaction] BEGIN");
         // Resolve destination info
-        com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = com.chainofproduct.utils.ResolveDestinations.resolve(destination);
-        String partnerHost = destInfo != null ? destInfo.ip : null;
-        int partnerPort = destInfo != null ? destInfo.signaturePort : 0;
-        // Ensure receiver cert/pubkey is present
-        try {
-            com.chainofproduct.utils.Cerificates.verifyCertificaAndObtain(this.clientName, destination, partnerHost, partnerPort);
-        } catch (Exception e) {
-            System.err.println("Certificate verification/exchange failed: " + e.getMessage());
-            return;
-        }
         String payload; // Will be set after isSeller/isBuyer are determined
         byte[] fileBytes = null;
         java.nio.file.Path path;
@@ -126,106 +118,105 @@ public class ClientOperations {
             System.err.println("Transaction JSON missing seller or buyer field");
             return;
         }
+
+        System.out.println("[sendtrsaction] Read fileBytes, length: " + (fileBytes != null ? fileBytes.length : -1));
+        System.out.println("[sendtrsaction] fileStr: " + fileStr);
+
         boolean isSeller = this.clientName.equalsIgnoreCase(seller);
         boolean isBuyer = this.clientName.equalsIgnoreCase(buyer);
         // Now that isSeller and isBuyer are defined, set the payload with role
         String role = isSeller ? "seller" : (isBuyer ? "buyer" : "unknown");
         payload = "{request_type: transaction, source: " + this.clientName + ", destination: " + destination + ", role: " + role + "}";
-        System.out.println("[sendtrsaction] BEGIN");
-        System.out.println("[sendtrsaction] dataFile: " + dataFile);
-        System.out.println("[sendtrsaction] destination: " + destination);
-        System.out.println("[sendtrsaction] BEGIN");
+        // Set partnerName: if I'm buyer, partner is seller; if I'm seller, partner is buyer
+        String partnerName = isBuyer ? seller : (isSeller ? buyer : destination);
+
+        System.out.println("[sendtrsaction] PartnerName: " + partnerName);
+
         System.out.println("[sendtrsaction] dataFile: " + dataFile);
         System.out.println("[sendtrsaction] destination: " + destination);
         if (!isSeller && !isBuyer) {
             System.err.println("Client is neither seller nor buyer, cannot send transaction");
-            System.out.println("[sendtrsaction] partnerHost: " + partnerHost + ", partnerPort: " + partnerPort);
-            System.out.println("[sendtrsaction] partnerHost: " + partnerHost + ", partnerPort: " + partnerPort);
             return;
         }
 
+
         // Check if file is already double signed: prefer filename, fallback to length/signature check
         boolean alreadySigned = false;
-                System.out.println("[sendtrsaction] Read fileBytes, length: " + (fileBytes != null ? fileBytes.length : -1));
+
         if (dataFile.endsWith("_signed.bin")) {
-                System.out.println("[sendtrsaction] Read fileBytes, length: " + (fileBytes != null ? fileBytes.length : -1));
             alreadySigned = true;
+            System.out.println("[sendtrsaction] File ends with _signed.bin, alreadySigned = true");
         } else {
             int sigLen = 344; // typical RSA signature length in Base64
-            System.out.println("[sendtrsaction] fileStr: " + fileStr);
             if (fileBytes.length > sigLen * 2) {
-            System.out.println("[sendtrsaction] jsonEnd: " + jsonEnd);
                 String sellerSig = fileStr.substring(fileStr.length() - sigLen * 2, fileStr.length() - sigLen);
                 String buyerSig = fileStr.substring(fileStr.length() - sigLen);
-            System.out.println("[sendtrsaction] fileStr: " + fileStr);
+                System.out.println("[sendtrsaction] fileStr: " + fileStr);
                 if (sellerSig.matches("[A-Za-z0-9+/=]{344}") && buyerSig.matches("[A-Za-z0-9+/=]{344}")) {
-            System.out.println("[sendtrsaction] jsonEnd: " + jsonEnd);
-            System.out.println("[sendtrsaction] jsonPart: " + jsonPart);
                     alreadySigned = true;
                 }
-            System.out.println("[sendtrsaction] seller: " + seller + ", buyer: " + buyer);
+                System.out.println("[sendtrsaction] alreadySigned check: " + alreadySigned);
             }
         }
-                System.err.println("[sendtrsaction] seller or buyer is null");
         byte[] toSend;
-            System.out.println("[sendtrsaction] jsonPart: " + jsonPart);
+        System.out.println("[sendtrsaction] jsonPart: " + jsonPart);
         if (alreadySigned) {
             // File is already double signed, send as is
             System.out.println("[sendtrsaction] isSeller: " + isSeller + ", isBuyer: " + isBuyer);
             System.out.println("[sendtrsaction] seller: " + seller + ", buyer: " + buyer);
             toSend = fileBytes;
-                System.err.println("[sendtrsaction] clientName: " + this.clientName);
+            System.err.println("[sendtrsaction] clientName: " + this.clientName);
         } else {
-                System.err.println("[sendtrsaction] seller or buyer is null");
+            System.out.println("[sendtrsaction] File not double signed yet, obtaining signatures");
+
+            com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = com.chainofproduct.utils.ResolveDestinations.resolve(partnerName);
+            String partnerHost = destInfo.ip;
+            int partnerPort = destInfo.signaturePort;
+            // Ensure receiver cert/pubkey is present
+            try {
+                com.chainofproduct.utils.Cerificates.verifyCertificaAndObtain(this.clientName, destination, partnerHost, partnerPort);
+            } catch (Exception e) {
+                System.err.println("Certificate verification/exchange failed: " + e.getMessage());
+                return;
+            }
+
             // Not signed, obtain signatures
-            String partnerName = destination;
+            System.out.println("[sendtrsaction] Obtaining double signature for partnerName: " + partnerName);
             String[] signatures = obtainDoubleSignature(fileBytes, partnerHost, partnerPort, partnerName, isSeller);
             if (signatures == null || signatures.length != 2) {
-                System.out.println("[sendtrsaction] File ends with _signed.bin, alreadySigned = true");
-            System.out.println("[sendtrsaction] isSeller: " + isSeller + ", isBuyer: " + isBuyer);
                 System.err.println("Failed to obtain double signature");
                 return;
             }
-                System.out.println("[sendtrsaction] my: " + signatures[0]);
-                System.out.println("[sendtrsaction] partner: " + signatures[1]);
+            System.out.println("[sendtrsaction] my: " + signatures[0]);
+            System.out.println("[sendtrsaction] partner: " + signatures[1]);
             // Concatenate file + mySignature + partnerSignature
             byte[] mySigBytes = signatures[isSeller ? 0 : 1].getBytes(java.nio.charset.StandardCharsets.UTF_8);
             System.out.println("[sendtrsaction] Both signatures match expected format, alreadySigned = true");
             byte[] partnerSigBytes = signatures[isSeller ? 1 : 0].getBytes(java.nio.charset.StandardCharsets.UTF_8);
             toSend = new byte[fileBytes.length + mySigBytes.length + partnerSigBytes.length];
             System.arraycopy(fileBytes, 0, toSend, 0, fileBytes.length);
-                System.out.println("[sendtrsaction] File ends with _signed.bin, alreadySigned = true");
+            System.out.println("[sendtrsaction] File ends with _signed.bin, alreadySigned = true");
             System.arraycopy(mySigBytes, 0, toSend, fileBytes.length, mySigBytes.length);
             System.arraycopy(partnerSigBytes, 0, toSend, fileBytes.length + mySigBytes.length, partnerSigBytes.length);
-                System.out.println("[sendtrsaction] Sending already double signed file, length: " + toSend.length);
+            System.out.println("[sendtrsaction] Sending already double signed file, length: " + toSend.length);
 
-            // Store signed file in same directory as original, named <transaction_id>_signed.json
-                System.out.println("[sendtrsaction] Obtaining double signature for partnerName: " + partnerName);
+            // Store signed file in same directory as original, named <transaction_id>_signed.bin
             try {
-                System.out.println("[sendtrsaction] obtainDoubleSignature returned: " + (signatures == null ? "null" : java.util.Arrays.toString(signatures)));
-                    System.out.println("[sendtrsaction] my: " + signatures[0]);
-                    System.out.println("[sendtrsaction] partner: " + signatures[1]);
-                    System.err.println("[sendtrsaction] signatures null or length != 2");
                 java.nio.file.Path parentDir = path.getParent();
                 // Extract transaction_id from JSON
-                        System.out.println("[sendtrsaction] Both signatures match expected format, alreadySigned = true");
-                String transactionId = extractJsonStringField(jsonPart, "transaction_id");
-                System.out.println("[sendtrsaction] mySigBytes length: " + mySigBytes.length);
-                System.out.println("[sendtrsaction] partnerSigBytes length: " + partnerSigBytes.length);
-                String signedFileName = transactionId + "_signed.bin";
+                Integer transactionId = extractJsonIntField(jsonPart, "id");
+                String signedFileName = (transactionId != null ? transactionId.toString() : "unknown") + "_signed.bin";
                 java.nio.file.Path signedPath = parentDir.resolve(signedFileName);
                 java.nio.file.Files.write(signedPath, toSend);
                 System.out.println("Signed transaction file written to: " + signedPath);
-                System.out.println("[sendtrsaction] toSend length: " + toSend.length);
             } catch (Exception e) {
-                System.out.println("[sendtrsaction] Sending already double signed file, length: " + toSend.length);
                 System.err.println("Failed to write signed transaction file: " + e.getMessage());
             }
-                System.out.println("[sendtrsaction] Obtaining double signature for partnerName: " + partnerName);
         }
 
+        System.out.println("[sendtrsaction] toSend length: " + toSend.length);
+
         byte[] payloadBytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        System.err.println("[sendtrsaction] signatures null or length != 2");
         byte[] combined = new byte[payloadBytes.length + toSend.length];
         System.arraycopy(payloadBytes, 0, combined, 0, payloadBytes.length);
         System.arraycopy(toSend, 0, combined, payloadBytes.length, toSend.length);
@@ -234,7 +225,7 @@ public class ClientOperations {
             this.serverHost,
             this.serverPort,
             this.entityType,
-            this.clientNum, // int, matches Request constructor
+            this.clientNum,
             this.receiverEntity,
             combined
         );
@@ -616,6 +607,24 @@ public class ClientOperations {
         int end = json.indexOf('"', start + 1);
         if (start == -1 || end == -1) return null;
         return json.substring(start + 1, end);
+    }
+
+        // Helper to extract an integer field from a simple JSON object (no nested objects, not using Jackson)
+    private Integer extractJsonIntField(String json, String field) {
+        String key = "\"" + field + "\":";
+        int idx = json.indexOf(key);
+        if (idx == -1) return null;
+        int start = idx + key.length();
+        // Skip whitespace
+        while (start < json.length() && Character.isWhitespace(json.charAt(start))) start++;
+        int end = start;
+        while (end < json.length() && Character.isDigit(json.charAt(end))) end++;
+        if (start == end) return null;
+        try {
+            return Integer.parseInt(json.substring(start, end));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     
