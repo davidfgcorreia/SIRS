@@ -1,4 +1,14 @@
 {
+  "server": {
+    "ip": "localhost",
+    "port": 8443,
+    "certPort": 9443
+  },
+  "db": {
+    "ip": "localhost",
+    "port": 5432,
+    "certPort": 6432
+  },
   "TestCompany": {
     "ip": "localhost",
     "port": 5001,

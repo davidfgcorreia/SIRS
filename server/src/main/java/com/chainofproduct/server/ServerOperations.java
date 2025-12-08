@@ -27,28 +27,43 @@ public class ServerOperations {
     private final ObjectMapper jsonMapper;
 
     public ServerOperations() throws Exception {
-        // Load server's private key for signing share operations
-        this.serverPrivateKey = loadPrivateKeyFromKeystore("server-keystore.p12", "changeit", "server");
-        // Load or generate storage encryption key for database
-        this.storageKey = loadOrGenerateStorageKey();
         
-        // Load database connection info from config
+        // Load server's private key for signing share operations
+        String keystorePassword = getEnvOrDefault("SERVER_KEYSTORE_PASSWORD", "changeit");
+        System.out.println("Loading server private key...");
+        this.serverPrivateKey = loadPrivateKeyFromKeystore("server-keystore.p12", keystorePassword, "server");
+        System.out.println("Server private key loaded");
+        
+        // Load or generate storage encryption key for database
+        this.storageKey = loadOrGenerateStorageKey(); // keys/storage-key.aes
+        System.out.println("Storage encryption key ready");
+        
+        // Load database connection info from config using ResolveDestinations
+        System.out.println("Loading database configuration...");
         String host = "localhost";
         int port = 5432;
         try {
-            java.nio.file.Path infoPath = java.nio.file.Paths.get("localization_info/database_info.json");
-            String json = new String(java.nio.file.Files.readAllBytes(infoPath), java.nio.charset.StandardCharsets.UTF_8);
-            host = extractJsonStringField(json, "ip");
-            String portStr = extractJsonStringField(json, "port");
-            if (portStr != null && !portStr.isEmpty()) {
-                port = Integer.parseInt(portStr);
-            }
+            com.chainofproduct.utils.ResolveDestinations.DestinationInfo dbInfo = 
+            com.chainofproduct.utils.ResolveDestinations.resolve("db");
+            host = dbInfo.ip;
+            port = dbInfo.port;
+            System.out.println("Database config loaded: " + host + ":" + port);
         } catch (Exception e) {
-            System.err.println("Failed to load database info, using defaults: " + e.getMessage());
+            System.err.println("Failed to load database info from elemets_info.json, using defaults: " + e.getMessage());
         }
         this.dbHost = host;
         this.dbPort = port;
         this.jsonMapper = new ObjectMapper();
+        
+        System.out.println("ServerOperations initialized successfully\n");
+    }
+    
+    /**
+     * Gets configuration value from environment variable or returns default.
+     */
+    private static String getEnvOrDefault(String envVar, String defaultValue) {
+        String value = System.getenv(envVar);
+        return (value != null && !value.isEmpty()) ? value : defaultValue;
     }
     
     /**
@@ -57,13 +72,17 @@ public class ServerOperations {
     private SecretKey loadOrGenerateStorageKey() throws Exception {
         String keyPath = "keys/storage-key.aes";
         try {
-            return CryptoUtils.readKeyFromFile(keyPath, "AES");
+            SecretKey key = CryptoUtils.readKeyFromFile(keyPath, "AES");
+            System.out.println("Loaded existing storage key from " + keyPath);
+            return key;
         } catch (Exception e) {
             // Generate new key if doesn't exist
+            System.out.println("Generating new storage key...");
             SecretKey key = CryptoUtils.generateAESKey(256);
             String b64 = Base64.getEncoder().encodeToString(key.getEncoded());
             Files.createDirectories(Paths.get("keys"));
             Files.writeString(Paths.get(keyPath), b64);
+            System.out.println("Storage key saved to " + keyPath);
             return key;
         }
     }
@@ -311,10 +330,7 @@ public class ServerOperations {
             String source = extractField(requestStr, "source");
             if (source == null) source = extractField(requestStr, "servername"); // fallback
             
-            long id = extractLongField(requestStr, "trasaction_id"); // Note: typo in client code
-            if (id == 0) {
-                id = extractLongField(requestStr, "transaction_id");
-            }
+            long id = extractLongField(requestStr, "transaction_id");
             
             // Get transaction via TCP (sql=5: getTransactionById)
             ObjectNode getRequest = jsonMapper.createObjectNode();
@@ -358,6 +374,7 @@ public class ServerOperations {
 
     /**
      * Handle get all transactions request with access control (SR1).
+     * Uses batch query to avoid N+1 problem.
      * Format: {request_type:getAll, source: ClientName}
      */
     private byte[] handleGetAllRequest(String requestStr) {
@@ -365,9 +382,10 @@ public class ServerOperations {
             String source = extractField(requestStr, "source");
             if (source == null) source = extractField(requestStr, "servername"); // fallback
             
-            // Get all transactions via TCP (sql=4: getAllTransactions)
+            // Get all transactions with shares in single batch query (sql=11: getAllTransactionsWithShares)
             ObjectNode getAllRequest = jsonMapper.createObjectNode();
-            getAllRequest.put("sql", 4);
+            getAllRequest.put("sql", 11);
+            getAllRequest.put("requester", source);
             byte[] allBytes = sendDatabaseRequest(getAllRequest);
             JsonNode allRecords = jsonMapper.readTree(allBytes);
             
@@ -376,31 +394,14 @@ public class ServerOperations {
             
             if (allRecords.isArray()) {
                 for (JsonNode rec : allRecords) {
-                    long recId = rec.get("id").asLong();
-                    
-                    // SR1: Check if this transaction was shared with source via TCP (sql=2: getShares)
-                    ObjectNode sharesRequest = jsonMapper.createObjectNode();
-                    sharesRequest.put("sql", 2);
-                    sharesRequest.put("transactionId", recId);
-                    byte[] sharesBytes = sendDatabaseRequest(sharesRequest);
-                    JsonNode sharesNode = jsonMapper.readTree(sharesBytes);
-                    List<String> shares = new ArrayList<>();
-                    if (sharesNode.isArray()) {
-                        for (JsonNode node : sharesNode) {
-                            shares.add(node.asText());
-                        }
-                    }
-                    
-                    if (shares.contains(source)) {
-                        if (!first) json.append(",");
-                        first = false;
-                        json.append(String.format(
-                            "{\"id\":%d,\"timestamp\":%d,\"seller\":\"%s\",\"buyer\":\"%s\",\"product\":\"%s\",\"units\":%d,\"amount\":%d,\"seller_signature\":\"%s\",\"buyer_signature\":\"%s\"}",
-                            rec.get("id").asLong(), rec.get("timestamp").asLong(), rec.get("seller").asText(),
-                            rec.get("buyer").asText(), rec.get("product").asText(), rec.get("units").asLong(),
-                            rec.get("amount").asLong(), rec.get("sellerSignature").asText(), rec.get("buyerSignature").asText()
-                        ));
-                    }
+                    if (!first) json.append(",");
+                    first = false;
+                    json.append(String.format(
+                        "{\"id\":%d,\"timestamp\":%d,\"seller\":\"%s\",\"buyer\":\"%s\",\"product\":\"%s\",\"units\":%d,\"amount\":%d,\"seller_signature\":\"%s\",\"buyer_signature\":\"%s\"}",
+                        rec.get("id").asLong(), rec.get("timestamp").asLong(), rec.get("seller").asText(),
+                        rec.get("buyer").asText(), rec.get("product").asText(), rec.get("units").asLong(),
+                        rec.get("amount").asLong(), rec.get("sellerSignature").asText(), rec.get("buyerSignature").asText()
+                    ));
                 }
             }
             json.append("]}");
@@ -446,15 +447,26 @@ public class ServerOperations {
                 return errorResponse("Access denied: transaction not shared with you");
             }
             
-            // SR4: Return share records with cryptographic proof - need new SQL operation
-            // For now, return simple shares list (TODO: add getShareRecords to ServerExecutorImpl)
+            // SR4: Get share records with cryptographic proof (sql=9: getShareRecords)
+            ObjectNode shareRecordsRequest = jsonMapper.createObjectNode();
+            shareRecordsRequest.put("sql", 9);
+            shareRecordsRequest.put("transactionId", id);
+            byte[] shareRecordsBytes = sendDatabaseRequest(shareRecordsRequest);
+            JsonNode shareRecords = jsonMapper.readTree(shareRecordsBytes);
+            
             StringBuilder json = new StringBuilder("{\"shares\":[");
-            for (int i = 0; i < shares.size(); i++) {
-                if (i > 0) json.append(",");
-                json.append(String.format(
-                    "{\"company\":\"%s\",\"shared_by\":\"unknown\",\"timestamp\":0,\"signature\":\"\"}",
-                    shares.get(i)
-                ));
+            if (shareRecords.isArray()) {
+                for (int i = 0; i < shareRecords.size(); i++) {
+                    if (i > 0) json.append(",");
+                    JsonNode record = shareRecords.get(i);
+                    json.append(String.format(
+                        "{\"company\":\"%s\",\"shared_by\":\"%s\",\"timestamp\":%d,\"signature\":\"%s\"}",
+                        record.get("share").asText(),
+                        record.get("sharedBy").asText(),
+                        record.get("timestamp").asLong(),
+                        record.get("signature").asText()
+                    ));
+                }
             }
             json.append("]}");
             
@@ -496,21 +508,25 @@ public class ServerOperations {
                 return errorResponse("Access denied: transaction not shared with you");
             }
             
-            // SR4: Get shares by sharedBy via TCP (sql=3: getSharesBySharedBy)
+            // SR4: Get shares by sharedBy with timestamp and signature (sql=10: getShareRecordsBySharedBy)
             ObjectNode getByRequest = jsonMapper.createObjectNode();
-            getByRequest.put("sql", 3);
+            getByRequest.put("sql", 10);
             getByRequest.put("transactionId", id);
             getByRequest.put("sharedBy", sharedBy);
             byte[] sharesByBytes = sendDatabaseRequest(getByRequest);
-            JsonNode sharesByNode = jsonMapper.readTree(sharesByBytes);
+            JsonNode shareRecords = jsonMapper.readTree(sharesByBytes);
             
             StringBuilder json = new StringBuilder("{\"shares\":[");
-            if (sharesByNode.isArray()) {
-                for (int i = 0; i < sharesByNode.size(); i++) {
+            if (shareRecords.isArray()) {
+                for (int i = 0; i < shareRecords.size(); i++) {
                     if (i > 0) json.append(",");
+                    JsonNode record = shareRecords.get(i);
                     json.append(String.format(
-                        "{\"company\":\"%s\",\"shared_by\":\"%s\",\"timestamp\":0,\"signature\":\"\"}",
-                        sharesByNode.get(i).asText(), sharedBy
+                        "{\"company\":\"%s\",\"shared_by\":\"%s\",\"timestamp\":%d,\"signature\":\"%s\"}",
+                        record.get("share").asText(),
+                        record.get("sharedBy").asText(),
+                        record.get("timestamp").asLong(),
+                        record.get("signature").asText()
                     ));
                 }
             }
@@ -573,14 +589,28 @@ public class ServerOperations {
     
     /**
      * Helper: Load public key for a company from truststore.
+     * Maps company names to certificate aliases.
      */
     private PublicKey getCompanyPublicKey(String companyName) throws Exception {
-        // Map company names to certificate aliases
-        // For client companies, the alias format is "client<num>"
-        // This is a simplified mapping - in production you'd have a proper registry
-        String alias = companyName.toLowerCase().replace(" ", "").replace("-", "");
-        // Try to load from server's truststore which contains all public keys
-        return loadPublicKeyFromKeystore("server-truststore.p12", "changeit", alias);
+        // Try multiple alias formats to find the certificate
+        String[] possibleAliases = {
+            companyName,  // Original name (e.g., "TestCompany")
+            companyName.toLowerCase(),  // Lowercase (e.g., "testcompany")
+            companyName.toLowerCase().replace(" ", "").replace("-", ""),  // Cleaned (e.g., "testcompany")
+        };
+        
+        // Try to load from server's truststore with different alias formats
+        for (String alias : possibleAliases) {
+            try {
+                return loadPublicKeyFromKeystore("server-truststore.p12", "changeit", alias);
+            } catch (Exception e) {
+                // Try next alias format
+            }
+        }
+        
+        // If all formats fail, throw exception with helpful message
+        throw new Exception("Certificate not found for company: " + companyName + 
+            ". Tried aliases: " + String.join(", ", possibleAliases));
     }
     
     /**
@@ -589,19 +619,6 @@ public class ServerOperations {
     private byte[] sendDatabaseRequest(ObjectNode request) throws Exception {
         byte[] requestBytes = jsonMapper.writeValueAsBytes(request);
         return ApiCalls.actAsSender(dbHost, dbPort, "server", 0, "db", requestBytes);
-    }
-    
-    /**
-     * Helper: Extract string field from simple JSON (no nested objects).
-     */
-    private String extractJsonStringField(String json, String field) {
-        String key = "\"" + field + "\":";
-        int idx = json.indexOf(key);
-        if (idx == -1) return null;
-        int start = json.indexOf('"', idx + key.length());
-        int end = json.indexOf('"', start + 1);
-        if (start == -1 || end == -1) return null;
-        return json.substring(start + 1, end);
     }
 
     // Helper methods for simple string parsing
