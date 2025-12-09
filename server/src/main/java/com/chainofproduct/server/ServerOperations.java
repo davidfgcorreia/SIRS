@@ -542,7 +542,7 @@ public class ServerOperations {
     /**
      * Helper: Load private key from PKCS12 keystore.
      */
-    private PrivateKey loadPrivateKeyFromKeystore(String keystorePath, String password, String alias) throws Exception {
+    public PrivateKey loadPrivateKeyFromKeystore(String keystorePath, String password, String alias) throws Exception {
         java.security.KeyStore keyStore = java.security.KeyStore.getInstance("PKCS12");
         try (java.io.FileInputStream fis = new java.io.FileInputStream(keystorePath)) {
             keyStore.load(fis, password.toCharArray());
@@ -553,7 +553,7 @@ public class ServerOperations {
     /**
      * Helper: Load public key from PKCS12 truststore.
      */
-    private PublicKey loadPublicKeyFromKeystore(String truststorePath, String password, String alias) throws Exception {
+    public PublicKey loadPublicKeyFromKeystore(String truststorePath, String password, String alias) throws Exception {
         java.security.KeyStore keyStore = java.security.KeyStore.getInstance("PKCS12");
         try (java.io.FileInputStream fis = new java.io.FileInputStream(truststorePath)) {
             keyStore.load(fis, password.toCharArray());
