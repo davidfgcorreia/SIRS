@@ -79,4 +79,32 @@ public class ResolveDestinations {
             return null;
         }
     }
+    public static java.util.List<String> resolve(String destinationName, boolean group) {
+        return resolve(destinationName, group, "localization_info/elemets_info.json");
+    }
+
+            // Group resolve: returns a list of names for group destinations
+        public static java.util.List<String> resolve(String destinationName, boolean group,String jsonPath) {
+            java.util.List<String> names = new java.util.ArrayList<>();
+            try {
+                String json = new String(Files.readAllBytes(Paths.get(jsonPath)), StandardCharsets.UTF_8);
+                String entryKey = destinationName;
+                int idx = json.indexOf(entryKey);
+                if (idx == -1) return names;
+                // Look for "names": [ ... ]
+                int namesKeyIdx = json.indexOf("\"names\"", idx);
+                if (namesKeyIdx == -1) return names;
+                int arrStart = json.indexOf('[', namesKeyIdx);
+                int arrEnd = json.indexOf(']', arrStart);
+                if (arrStart == -1 || arrEnd == -1) return names;
+                String arrContent = json.substring(arrStart + 1, arrEnd);
+                for (String part : arrContent.split(",")) {
+                    String name = part.replaceAll("[\"\s]", "").trim();
+                    if (!name.isEmpty()) names.add(name);
+                }
+            } catch (Exception e) {
+                // ignore, return empty list
+            }
+            return names;
+        }
 }

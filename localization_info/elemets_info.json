@@ -4,6 +4,9 @@
     "port": 8443,
     "certPort": 9443
   },
+  "groupCClients": {
+    "names": ["clientA", "clientB", "clientC"]
+  },
   "db": {
     "ip": "localhost",
     "port": 5432,

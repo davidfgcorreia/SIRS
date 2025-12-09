@@ -41,7 +41,7 @@ public class ClientOperations {
 
     
     // Enqueue a transaction send request (Type 1)
-    public void sendtrsaction(String dataFile, String destination) {
+    public void sendtrsaction(String dataFile, String destination,boolean group) {
         String payload;
         byte[] fileBytes = null;
         java.nio.file.Path path;
@@ -75,7 +75,7 @@ public class ClientOperations {
         boolean isBuyer = this.clientName.equalsIgnoreCase(buyer);
         // Now that isSeller and isBuyer are defined, set the payload with role
         String role = isSeller ? "seller" : (isBuyer ? "buyer" : "unknown");
-        payload = "{\"request_type\": \"transaction\", \"source\": \"" + this.clientName + "\", \"destination\": \"" + destination + "\", \"role\": \"" + role + "\"}";
+        payload = "{\"request_type\": \"transaction\", \"source\": \"" + this.clientName + "\", \"destination\": \"" + destination + "\", \"role\": \"" + role + "\", \"group\": " + group + "}";
         // Set partnerName: if I'm buyer, partner is seller; if I'm seller, partner is buyer
         String partnerName;
         if (isSeller) {
@@ -479,30 +479,56 @@ public class ClientOperations {
             String buyer = extractJsonStringField(jsonPart, "buyer");
             if (seller == null) seller = "";
             if (buyer == null) buyer = "";
-            if (clientName.equalsIgnoreCase(seller)) {
-                role = "seller";
-            } else if (clientName.equalsIgnoreCase(buyer)) {
-                role = "buyer";
-            } else {
-                System.err.println("verifyFileIntegrity: clientName does not match seller or buyer");
-                return false;
-            }
+            boolean isSeller = clientName.equalsIgnoreCase(seller);
+            boolean isBuyer = clientName.equalsIgnoreCase(buyer);
 
             // 3. Compute hash of the file
             java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
             byte[] fileHash = digest.digest(fileBytes);
 
-            // 4. Load my public key from PKCS12 truststore-pubkeys
-            java.security.PublicKey myPubKey = loadPublicKeyFromTruststore("keys/client-truststore-pubkeys.p12", this.clientName, "changeit");
-
-            // 5. Verify the relevant signature
-            if ("seller".equalsIgnoreCase(role)) {
+            // 4. Load public key for verification
+            if (isSeller) {
+                java.security.PublicKey myPubKey = loadPublicKeyFromTruststore("keys/client-truststore-pubkeys.p12", this.clientName, "changeit");
                 return verifySignature(fileHash, sellerSigB64, myPubKey);
-            } else if ("buyer".equalsIgnoreCase(role)) {
+            } else if (isBuyer) {
+                java.security.PublicKey myPubKey = loadPublicKeyFromTruststore("keys/client-truststore-pubkeys.p12", this.clientName, "changeit");
                 return verifySignature(fileHash, buyerSigB64, myPubKey);
             } else {
-                System.err.println("verifyFileIntegrity: unknown role '" + role + "'");
-                return false;
+                // Not seller or buyer: try to resolve both and verify with their public keys
+                Exception lastException = null;
+                // Try to get seller's cert/pubkey, if not available try buyer's, but only verify signature once
+                String[] names = new String[]{seller, buyer};
+                String[] sigs = new String[]{sellerSigB64, buyerSigB64};
+                java.security.PublicKey pubKey = null;
+                String sig = null;
+                String usedName = null;
+
+                for (int i = 0; i < names.length; i++) {
+                    String name = names[i];
+                    try {
+                        com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = com.chainofproduct.utils.ResolveDestinations.resolve(name);
+                        com.chainofproduct.utils.Cerificates.verifyCertificaAndObtain(this.clientName, name, destInfo.ip, destInfo.certPort); 
+                        pubKey = loadPublicKeyFromTruststore("keys/client-truststore-pubkeys.p12", name, "changeit");
+                        sig = sigs[i];
+                        usedName = name;
+                        break;
+                    } catch (Exception e) {
+                        lastException = e;
+                        // Try next
+                    }
+                }
+                if (pubKey == null) {
+                    System.err.println("verifyFileIntegrity: could not obtain public key for seller or buyer" + (lastException != null ? (": " + lastException.getMessage()) : ""));
+                    return false;
+                }
+                boolean result = false;
+                try {
+                    result = verifySignature(fileHash, sig, pubKey);
+                } catch (Exception e) {
+                    System.err.println("verifyFileIntegrity: signature verification failed for " + usedName + ": " + e.getMessage());
+                    return false;
+                }
+                return result;
             }
         } catch (Exception e) {
             System.err.println("verifyFileIntegrity error: " + e.getMessage());

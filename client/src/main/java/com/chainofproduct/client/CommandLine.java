@@ -24,11 +24,11 @@ public class CommandLine {
                 try {
                     switch (cmd) {
                         case "send":
-                            if (parts.length < 3) {
-                                System.out.println("Usage: send <data_file> <destination>");
+                            if (parts.length < 4) {
+                                System.out.println("Usage: send <data_file> <destination> <group>");
                                 break;
                             }
-                            operations.sendtrsaction(parts[1], parts[2]);
+                            operations.sendtrsaction(parts[1], parts[2],Boolean.parseBoolean(parts[3]));
                             break;
                         case "getbyid":
                             if (parts.length < 2) {

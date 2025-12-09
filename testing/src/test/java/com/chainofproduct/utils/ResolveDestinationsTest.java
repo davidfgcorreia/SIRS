@@ -17,4 +17,14 @@ public class ResolveDestinationsTest {
         int expectedSignaturePort = 7001; // If your JSON has signaturePort, set this accordingly; else, port+2000
         assertEquals("signaturePort should be 7001 (or port+2000)", expectedSignaturePort, info.signaturePort);
     }
+
+    @Test
+    public void testResolveGroupNames() {
+        java.util.List<String> names = ResolveDestinations.resolve("groupCClients", true, "../localization_info/elemets_info.json");
+        assertNotNull("Group names list should not be null", names);
+        assertEquals("Group should have 3 members", 3, names.size());
+        assertTrue("Group should contain clientA", names.contains("clientA"));
+        assertTrue("Group should contain clientB", names.contains("clientB"));
+        assertTrue("Group should contain clientC", names.contains("clientC"));
+    }
 }

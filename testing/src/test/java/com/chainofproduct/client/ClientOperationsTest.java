@@ -88,8 +88,8 @@ public class ClientOperationsTest {
             }
         };
 
-        // Use the correct buyer as the destination
-        mockOps.sendtrsaction(tempFile.toString(), "someotherClinet");
+        // Use the correct buyer as the destination, and set group=true
+        mockOps.sendtrsaction(tempFile.toString(), "someotherClinet", false);
         assertFalse(requestList.isEmpty());
         Request req = requestList.get(0);
         // Assert all fields of the Request object
@@ -104,6 +104,8 @@ public class ClientOperationsTest {
         System.out.println("[testSendTransaction] Payload: " + payload);
         assertTrue(payload.startsWith("{\"request_type\": \"transaction\","));
         assertTrue(payload.contains("\"destination\": \"someotherClinet\","));
+        // Assert group flag is present and set to false
+        assertTrue(payload.contains("\"group\": false"));
         // Assert both signatures are present (since now they are appended, not in JSON)
         assertTrue(payload.contains("my_signature:mysig"));
         assertTrue(payload.contains("partner_signature:partnersig"));
@@ -290,6 +292,38 @@ public class ClientOperationsTest {
     }
 
     @Test
+    public void testVerifyFileIntegrityAsThirdParty() throws Exception {
+        System.out.println("[TEST] testVerifyFileIntegrityAsThirdParty");
+        // Generate keypairs for seller and buyer
+        java.security.KeyPairGenerator keyGen = java.security.KeyPairGenerator.getInstance("RSA");
+        keyGen.initialize(2048);
+        java.security.KeyPair sellerKeyPair = keyGen.generateKeyPair();
+        java.security.KeyPair buyerKeyPair = keyGen.generateKeyPair();
+        java.security.PrivateKey sellerPrivateKey = sellerKeyPair.getPrivate();
+        java.security.PublicKey sellerPublicKey = sellerKeyPair.getPublic();
+        java.security.PrivateKey buyerPrivateKey = buyerKeyPair.getPrivate();
+        java.security.PublicKey buyerPublicKey = buyerKeyPair.getPublic();
+
+        // Create a valid signed file (seller: client42, buyer: buyer42)
+        java.nio.file.Path tempFile = createSignedTransactionFile(sellerPrivateKey, buyerPrivateKey, "client42", "buyer42", "txid", false);
+
+        // Create a ClientOperations for a third party (not seller or buyer)
+        ClientOperations mockOps = new ClientOperations(sendQueue, sendLock, "thirdParty") {
+            @Override
+            public java.security.PublicKey loadPublicKeyFromTruststore(String truststorePath, String alias, String password) {
+                if (alias.equals("client42")) return sellerPublicKey;
+                if (alias.equals("buyer42")) return buyerPublicKey;
+                return null;
+            }
+        };
+
+        boolean result = mockOps.verifyFileIntegrity(tempFile.toString());
+        assertTrue(result);
+        java.nio.file.Files.delete(tempFile);
+        System.out.println("[testVerifyFileIntegrityAsThirdParty] All assertions passed.");
+    }
+
+    @Test
     public void testObtainDoubleSignature() throws Exception {
         System.out.println("[TEST] testObtainDoubleSignature");
         // Prepare dummy transaction data
@@ -315,4 +349,5 @@ public class ClientOperationsTest {
         assertEquals("BUYER_SIG", sigs[1]);
         System.out.println("[testObtainDoubleSignature_Mocked] All assertions passed.");
     }
+
 }
