@@ -3,6 +3,7 @@ package com.chainofproduct.client;
 import com.chainofproduct.utils.Request;
 import org.junit.BeforeClass;
 import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Test;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -21,6 +22,10 @@ public class ClientOperationsTest {
     private static List<Request> requestList;
     private static ClientOperations clientOps;
 
+    private static org.mockito.MockedStatic<com.chainofproduct.utils.ResolveDestinations> resolveDestinationsMock;
+    private static org.mockito.MockedStatic<com.chainofproduct.utils.Cerificates> cerificatesMock;
+    private static org.mockito.MockedStatic<com.chainofproduct.utils.ApiCalls> apiCallsMock;
+
     @BeforeClass
     public static void setUp() throws Exception {
         requestList = new ArrayList<>();
@@ -35,27 +40,63 @@ public class ClientOperationsTest {
         // Mock ResolveDestinations.resolve to return a dummy DestinationInfo
         com.chainofproduct.utils.ResolveDestinations.DestinationInfo mockDestInfo =
             new com.chainofproduct.utils.ResolveDestinations.DestinationInfo("127.0.0.1", 12345, 13345, 14345);
-        mockStatic(com.chainofproduct.utils.ResolveDestinations.class);
+        resolveDestinationsMock = mockStatic(com.chainofproduct.utils.ResolveDestinations.class);
         when(com.chainofproduct.utils.ResolveDestinations.resolve(anyString())).thenReturn(mockDestInfo);
 
         // Mock Cerificates.verifyCertificaAndObtain to do nothing
-        mockStatic(com.chainofproduct.utils.Cerificates.class);
+        cerificatesMock = mockStatic(com.chainofproduct.utils.Cerificates.class);
         doNothing().when(com.chainofproduct.utils.Cerificates.class);
         com.chainofproduct.utils.Cerificates.verifyCertificaAndObtain(anyString(), anyString(), anyString(), anyInt());
 
         clientOps = new ClientOperations(sendQueue, sendLock, "client42");
         // Mock ApiCalls.actAsSender to return a fake response for double signature
-        mockStatic(com.chainofproduct.utils.ApiCalls.class);
+        apiCallsMock = mockStatic(com.chainofproduct.utils.ApiCalls.class);
         // Default: Return both 'my signature' and 'partner signature' as Strings
         when(com.chainofproduct.utils.ApiCalls.actAsSender(anyString(), anyInt(), anyString(), anyInt(), anyString(), any(byte[].class)))
             .thenReturn("my_signature:mysig,partner_signature:partnersig".getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
+        @AfterClass
+        public static void cleanUpMocks() {
+            if (resolveDestinationsMock != null) resolveDestinationsMock.close();
+            if (cerificatesMock != null) cerificatesMock.close();
+            if (apiCallsMock != null) apiCallsMock.close();
+            org.mockito.Mockito.framework().clearInlineMocks();
+        }
     @After
     public void tearDown() {
         requestList.clear();
         sendQueue.clear();
     }
+
+    @Test
+        public void testUpdateGroup() {
+            System.out.println("[TEST] testUpdateGroup");
+            requestList.clear();
+            List<String> additions = new ArrayList<>();
+            additions.add("CompanyA");
+            additions.add("CompanyB");
+            List<String> removals = new ArrayList<>();
+            removals.add("CompanyC");
+            removals.add("CompanyD");
+            clientOps.updateGroup("TestGroup", additions, removals);
+            assertFalse(requestList.isEmpty());
+            Request req = requestList.get(0);
+            assertEquals("127.0.0.1", req.getHost());
+            assertEquals(12345, req.getPort());
+            assertEquals("client", req.getEntityType());
+            assertEquals(42, req.getClientNum());
+            assertEquals("server", req.getReceiverEntity());
+            String payload = new String(req.getDataFile(), java.nio.charset.StandardCharsets.UTF_8);
+            System.out.println("[testUpdateGroup] Payload: " + payload);
+            assertTrue(payload.contains("\"request_type\": \"groupUpdate\""));
+            assertTrue(payload.contains("\"source\": \"client42\""));
+            assertTrue(payload.contains("\"group\": \"TestGroup\""));
+            assertTrue(payload.contains("\"groupAdditions\": [\"CompanyA\", \"CompanyB\"]"));
+            assertTrue(payload.contains("\"groupRemove\": [\"CompanyC\", \"CompanyD\"]"));
+            System.out.println("[testUpdateGroup] All assertions passed.");
+        }
+
 
     // Extracts the value of a JSON string field (with double quotes)
     private String extractRequestType(String payload) {

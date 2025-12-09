@@ -23,6 +23,16 @@ public class CommandLine {
                 String cmd = parts[0].toLowerCase();
                 try {
                     switch (cmd) {
+                            case "groupupdate":
+                                if (parts.length < 4) {
+                                    System.out.println("Usage: groupupdate <group_name> <add1,add2,...> <remove1,remove2,...>");
+                                    break;
+                                }
+                                String groupName = parts[1];
+                                java.util.List<String> additions = java.util.Arrays.asList(parts[2].split(","));
+                                java.util.List<String> removals = java.util.Arrays.asList(parts[3].split(","));
+                                operations.updateGroup(groupName, additions, removals);
+                                break;
                         case "send":
                             if (parts.length < 4) {
                                 System.out.println("Usage: send <data_file> <destination> <group>");
@@ -70,7 +80,7 @@ public class CommandLine {
                             System.out.println("File integrity: " + (valid ? "VALID" : "TAMPERED"));
                             break;
                         default:
-                            System.out.println("Unknown command. Supported: send, getbyid, getall, getshares, getsharesby, getrecent, verifyfile, exit");
+                                System.out.println("Unknown command. Supported: send, getbyid, getall, getshares, getsharesby, getrecent, verifyfile, groupupdate, exit");
                     }
                 } catch (Exception e) {
                     System.out.println("Error: " + e.getMessage());

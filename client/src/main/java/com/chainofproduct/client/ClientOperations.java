@@ -39,6 +39,43 @@ public class ClientOperations {
         }
     }
 
+
+            // Enqueue a group update request
+        public void updateGroup(String groupName, java.util.List<String> additions, java.util.List<String> removals) {
+            StringBuilder payloadBuilder = new StringBuilder();
+            payloadBuilder.append("{\"request_type\": \"groupUpdate\", ");
+            payloadBuilder.append("\"source\": \"").append(this.clientName).append("\", ");
+            payloadBuilder.append("\"group\": \"").append(groupName).append("\", ");
+            payloadBuilder.append("\"groupAdditions\": ").append(listToJsonArray(additions)).append(", ");
+            payloadBuilder.append("\"groupRemove\": ").append(listToJsonArray(removals));
+            payloadBuilder.append("}");
+
+            String payload = payloadBuilder.toString();
+            Request req = new Request(
+                this.serverHost,
+                this.serverPort,
+                this.entityType,
+                this.clientNum,
+                this.receiverEntity,
+                payload.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+            );
+            enqueueRequest(req);
+            System.out.println("Enqueued group update request for group=" + groupName);
+        }
+
+        // Helper to convert a list of strings to a JSON array
+        private String listToJsonArray(java.util.List<String> list) {
+            if (list == null) return "[]";
+            StringBuilder sb = new StringBuilder();
+            sb.append("[");
+            for (int i = 0; i < list.size(); i++) {
+                sb.append("\"").append(list.get(i)).append("\"");
+                if (i < list.size() - 1) sb.append(", ");
+            }
+            sb.append("]");
+            return sb.toString();
+        }
+
     
     // Enqueue a transaction send request (Type 1)
     public void sendtrsaction(String dataFile, String destination,boolean group) {
@@ -192,7 +229,7 @@ public class ClientOperations {
 
     // Enqueue a getById request (Type 3)
     public void gettransactionById(long id) {
-        String payload = "{\"request_type\":\"getById\",\"servername\":\"" + this.clientName + "\",\"transaction_id\":" + id + "}";
+        String payload = "{\"request_type\":\"getById\",\"source\":\"" + this.clientName + "\",\"transaction_id\":" + id + "}";
         Request req = new Request(
             this.serverHost,
             this.serverPort,
@@ -208,7 +245,7 @@ public class ClientOperations {
     // Enqueue a getAll request (Type 4)
     public void getAll() {
         System.out.println("[sendtrsaction] Request created: host=" + this.serverHost + ", port=" + this.serverPort + ", entityType=" + this.entityType + ", clientNum=" + this.clientNum + ", receiverEntity=" + this.receiverEntity );
-        String payload = "{\"request_type\":\"getAll\",\"servername\":\"" + this.clientName + "\"}";
+        String payload = "{\"request_type\":\"getAll\",\"source\":\"" + this.clientName + "\"}";
         System.out.println("[sendtrsaction] END");
         Request req = new Request(
             this.serverHost,
@@ -224,7 +261,7 @@ public class ClientOperations {
 
     // Enqueue a getShares request (Type 5)
     public void getShares(long tid) {
-        String payload = "{\"request_type\":\"getShares\",\"servername\":\"" + this.clientName + "\",\"transaction_id\":" + tid + "}";
+        String payload = "{\"request_type\":\"getShares\",\"source\":\"" + this.clientName + "\",\"transaction_id\":" + tid + "}";
         Request req = new Request(
             this.serverHost,
             this.serverPort,
@@ -239,7 +276,7 @@ public class ClientOperations {
 
     // Enqueue a getSharesBy request (Type 6)
     public void getSharesBy(long tid, String sharedBy) {
-        String payload = "{\"request_type\":\"getSharesBy\",\"servername\":\"" + this.clientName + "\",\"transaction_id\":" + tid + ",\"shared_by\":\"" + sharedBy + "\"}";
+        String payload = "{\"request_type\":\"getSharesBy\",\"source\":\"" + this.clientName + "\",\"transaction_id\":" + tid + ",\"shared_by\":\"" + sharedBy + "\"}";
         Request req = new Request(
             this.serverHost,
             this.serverPort,
@@ -254,7 +291,7 @@ public class ClientOperations {
 
         // Enqueue a getRecentTransactions request (Type 7)
     public void getRecentTransactionsSince(long sinceTimestamp) {
-        String payload = "{\"request_type\":\"getRecentTransactions\",\"servername\":\"" + this.clientName + "\",\"since\":" + sinceTimestamp + "}";
+        String payload = "{\"request_type\":\"getRecentTransactions\",\"source\":\"" + this.clientName + "\",\"since\":" + sinceTimestamp + "}";
         Request req = new Request(
             this.serverHost,
             this.serverPort,
