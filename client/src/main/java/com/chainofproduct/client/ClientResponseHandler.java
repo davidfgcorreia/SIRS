@@ -24,9 +24,9 @@ public class ClientResponseHandler {
             return;
         }
         String headerJson = new String(responseBytes, 0, headerEnd + 1, StandardCharsets.UTF_8);
-        String responseType = extractRequestType(headerJson);
-        int numFiles = extractNumFiles(headerJson);
-        String filename = extractFilename(headerJson);
+        String responseType = extractJsonStringField(headerJson, "request_type");
+        int numFiles = extractJsonIntField(headerJson, "files");
+        String filename = extractJsonStringField(headerJson, "filename");
         if (responseType == null) {
             System.out.println("Response: " + headerJson);
             return;
@@ -156,31 +156,6 @@ public class ClientResponseHandler {
         return -1;
     }
 
-    // Helper: extract number of files from JSON header
-    private int extractNumFiles(String headerJson) {
-        String key = "files:";
-        int idx = headerJson.indexOf(key);
-        if (idx == -1) return 0;
-        int start = idx + key.length();
-        int end = headerJson.indexOf(',', start);
-        if (end == -1) end = headerJson.indexOf('}', start);
-        if (end == -1) return 0;
-        String num = headerJson.substring(start, end).replaceAll("[^0-9]", "").trim();
-        try { return Integer.parseInt(num); } catch (Exception e) { return 0; }
-    }
-
-    // Helper: extract filename from JSON header
-    private String extractFilename(String headerJson) {
-        String key = "filename:";
-        int idx = headerJson.indexOf(key);
-        if (idx == -1) return "file";
-        int start = idx + key.length();
-        int end = headerJson.indexOf(',', start);
-        if (end == -1) end = headerJson.indexOf('}', start);
-        if (end == -1) return "file";
-        String name = headerJson.substring(start, end).replaceAll("[\"{} ]", "").trim();
-        return name.isEmpty() ? "file" : name;
-    }
 
     private void saveToFile(String filePath, byte[] data) {
         try {
@@ -191,18 +166,32 @@ public class ClientResponseHandler {
         }
     }
 
-    private String extractRequestType(String requestStr) {
-        // Simple extraction from JSON-like string: {request_type:TYPE,...}
-        String key = "request_type:";
-        int idx = requestStr.indexOf(key);
+    // Helper to extract a string field from a JSON object (with double quotes)
+    private String extractJsonStringField(String json, String field) {
+        String key = "\"" + field + "\":";
+        int idx = json.indexOf(key);
         if (idx == -1) return null;
-        int start = idx + key.length();
-        int end = requestStr.indexOf(',', start);
-        if (end == -1) end = requestStr.indexOf('}', start);
-        if (end == -1) return null;
-        String type = requestStr.substring(start, end).trim();
-        // Remove possible quotes or spaces
-        type = type.replaceAll("[\"{} ]", "");
-        return type;
+        int start = json.indexOf('"', idx + key.length());
+        int end = json.indexOf('"', start + 1);
+        if (start == -1 || end == -1) return null;
+        return json.substring(start + 1, end);
     }
-}
+
+    // Helper to extract an integer field from a JSON object (with double quotes)
+    private int extractJsonIntField(String json, String field) {
+        String key = "\"" + field + "\":";
+        int idx = json.indexOf(key);
+        if (idx == -1) return 0;
+        int start = idx + key.length();
+        // Skip whitespace
+        while (start < json.length() && Character.isWhitespace(json.charAt(start))) start++;
+        int end = start;
+        while (end < json.length() && Character.isDigit(json.charAt(end))) end++;
+        if (start == end) return 0;
+        try {
+            return Integer.parseInt(json.substring(start, end));
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+    }

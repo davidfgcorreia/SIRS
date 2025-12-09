@@ -35,7 +35,7 @@ public class ClientResponseHandlerTest {
 
     @Test
     public void testHandleGetByIdResponse() throws Exception {
-        String header = "{request_type:getById,files:1,filename:testfile}";
+        String header = "{\"request_type\":\"getById\",\"files\":1,\"filename\":\"testfile\"}";
         byte[] json = "{\"seller\":\"A\",\"buyer\":\"B\"}".getBytes(StandardCharsets.UTF_8);
         byte[] sig = new byte[344];
         Arrays.fill(sig, (byte)'A');
@@ -64,7 +64,7 @@ public class ClientResponseHandlerTest {
 
     @Test
     public void testHandleGetAllResponse() throws Exception {
-        String header = "{request_type:getAll,files:2}";
+        String header = "{\"request_type\":\"getAll\",\"files\":2}";
         String[] names = {"test1", "test2"};
         byte[] json = "{\"seller\":\"A\",\"buyer\":\"B\"}".getBytes(StandardCharsets.UTF_8);
         byte[] sig = new byte[344];
@@ -107,7 +107,7 @@ public class ClientResponseHandlerTest {
 
     @Test
     public void testHandleGetSharesResponse() throws Exception {
-        String header = "{request_type:getShares,files:0}";
+        String header = "{\"request_type\":\"getShares\",\"files\":0}";
         String json = "{\"shares\":[{\"seller\":\"A\",\"buyer\":\"B\"}]}";
         byte[] response = (header + json).getBytes(StandardCharsets.UTF_8);
         handler.handleResponse(response);
@@ -116,7 +116,7 @@ public class ClientResponseHandlerTest {
 
     @Test
     public void testHandleGetSharesByResponse() throws Exception {
-        String header = "{request_type:getSharesBy,files:0}";
+        String header = "{\"request_type\":\"getSharesBy\",\"files\":0}";
         String json = "{\"shares\":[{\"seller\":\"A\",\"buyer\":\"B\"}]}";
         byte[] response = (header + json).getBytes(StandardCharsets.UTF_8);
         handler.handleResponse(response);
