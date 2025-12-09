@@ -40,8 +40,8 @@ public class ServerOperations {
         
         // Load database connection info from config using ResolveDestinations
         System.out.println("Loading database configuration...");
-        String host = "localhost";
-        int port = 5432;
+        String host= null ;
+        int port= -1;
         try {
             com.chainofproduct.utils.ResolveDestinations.DestinationInfo dbInfo = 
             com.chainofproduct.utils.ResolveDestinations.resolve("db");
@@ -229,7 +229,6 @@ public class ServerOperations {
             dbRequest.put("encryptedData", encryptedB64);
             sendDatabaseRequest(dbRequest);
             
-            // SR4: Add initial shares with server signature via TCP (sql=1: addShare)
             long shareTime = System.currentTimeMillis();
             String shareData = String.format("%d:%s:server", id, seller);
             String sellerShareSig = signData(shareData.getBytes(), serverPrivateKey);

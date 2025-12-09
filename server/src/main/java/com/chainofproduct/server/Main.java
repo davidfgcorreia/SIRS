@@ -4,6 +4,7 @@ import com.chainofproduct.utils.ApiCalls;
 import com.chainofproduct.utils.CryptoUtils;
 import com.chainofproduct.utils.KeyTransmission;
 
+
 public class Main {
     
     // Server metrics
@@ -21,23 +22,28 @@ public class Main {
     public static void main(String[] args) throws Exception {
         
         String serverName = "server";
-        System.out.println("Validating required files...");
-        validateRequiredFiles();
-        
+        System.out.println("Generating keys...");
+        com.chainofproduct.utils.Cerificates.main(new String[]{serverName});
+
+
         // Start EC keypair and key exchange listener using KeyTransmission (utils package)
         KeyTransmission keyTransmission = new KeyTransmission();
-        try {
-            // Use serverName as storePrefix, and resolve port for key exchange
-            System.out.println("Starting EC key exchange listener...");
-            com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = 
-            com.chainofproduct.utils.ResolveDestinations.resolve(serverName);
-            int keyExchangePort = destInfo.certPort;
-            keyTransmission.ensureECKeyAndStartListener(serverName, keyExchangePort);
-            System.out.println("EC key exchange listener started on port " + keyExchangePort);
-        } catch (Exception e) {
-            System.err.println("Failed to start EC key exchange listener: " + e.getMessage());
-            e.printStackTrace();
-        }
+        Thread ecKeyExchangeThread = new Thread(() -> {
+            try {
+                // Use serverName as storePrefix, and resolve port for key exchange
+                System.out.println("Starting EC key exchange listener...");
+                com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = 
+                    com.chainofproduct.utils.ResolveDestinations.resolve(serverName);
+                int keyExchangePort = destInfo.certPort;
+                keyTransmission.ensureECKeyAndStartListener(serverName, keyExchangePort);
+                System.out.println("EC key exchange listener started on port " + keyExchangePort);
+            } catch (Exception e) {
+                System.err.println("Failed to start EC key exchange listener: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }, "ECKeyExchangeListener");
+        ecKeyExchangeThread.setDaemon(true);
+        ecKeyExchangeThread.start();
         
         // Initialize CryptoUtils to ensure replay-protection timer and nonce map are started
         try {
@@ -69,6 +75,7 @@ public class Main {
 
         // Create ServerOperations to handle requests
         final ServerOperations serverOps = new ServerOperations();
+
 
         // Start TLS receiver thread - this is the ONLY communication channel now
         // Load TLS port from config
@@ -210,31 +217,6 @@ public class Main {
             serverSocket.close();
             System.out.println("Server socket closed");
         }
-    }
-    
-    /**
-     * Validates that all required files exist before starting the server.
-     * Exits with clear error message if any file is missing.
-     */
-    private static void validateRequiredFiles() {
-        String[] requiredFiles = {
-            "server-keystore.p12",
-            "server-truststore.p12"
-        };
-        
-        boolean allFilesExist = true;
-        for (String file : requiredFiles) {
-            if (!new java.io.File(file).exists()) {
-                allFilesExist = false;
-            } else {
-                System.out.println("Found: " + file);
-            }
-        }
-        
-        if (!allFilesExist) {
-            System.exit(1);
-        }
-        System.out.println("All required files validated.\n");
     }
     
     /**

@@ -1,5 +1,6 @@
 package com.chainofproduct.client;
 
+import com.chainofproduct.utils.CryptoUtils;
 import com.chainofproduct.utils.KeyTransmission;
 
 
@@ -29,6 +30,15 @@ public class ClientMain {
         });
         keyExchangeThread.setDaemon(true);
         keyExchangeThread.start();
+
+         // Initialize CryptoUtils to ensure replay-protection timer and nonce map are started
+        try {
+            System.out.println("Initializing CryptoUtils...");
+            CryptoUtils.generateNonce();
+            System.out.println("CryptoUtils initialized (replay protection active)");
+        } catch (Throwable t) {
+            System.err.println("Failed to initialize CryptoUtils: " + t.getMessage());
+        }
 
         // Shared queue and lock for sending requests
         java.util.concurrent.BlockingQueue<com.chainofproduct.utils.Request> sendQueue = new java.util.concurrent.LinkedBlockingQueue<>();
