@@ -511,7 +511,6 @@ public class ClientOperations {
             int jsonEnd = jsonString.indexOf('}') + 1;
             if (jsonEnd <= 0) return false;
             String jsonPart = jsonString.substring(0, jsonEnd);
-            String role = null;
             String seller = extractJsonStringField(jsonPart, "seller");
             String buyer = extractJsonStringField(jsonPart, "buyer");
             if (seller == null) seller = "";
