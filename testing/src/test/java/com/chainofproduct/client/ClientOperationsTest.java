@@ -57,14 +57,17 @@ public class ClientOperationsTest {
         sendQueue.clear();
     }
 
+    // Extracts the value of a JSON string field (with double quotes)
     private String extractRequestType(String payload) {
-        int start = payload.indexOf("request_type:");
+        // Look for "request_type":"..."
+        String key = "\"request_type\":";
+        int idx = payload.indexOf(key);
+        if (idx == -1) return null;
+        int start = payload.indexOf('"', idx + key.length());
         if (start == -1) return null;
-        int end = payload.indexOf(',', start);
-        if (end == -1) end = payload.indexOf('}', start);
+        int end = payload.indexOf('"', start + 1);
         if (end == -1) return null;
-        String value = payload.substring(start + "request_type:".length(), end).trim();
-        return value;
+        return payload.substring(start + 1, end);
     }
 
     
@@ -99,9 +102,9 @@ public class ClientOperationsTest {
         // Inspect the payload structure
         String payload = new String(req.getDataFile(), java.nio.charset.StandardCharsets.UTF_8);
         System.out.println("[testSendTransaction] Payload: " + payload);
-        assertTrue(payload.startsWith("{request_type: transaction"));
-        assertTrue(payload.contains("destination: someotherClinet"));
-        // Assert both signatures are present
+        assertTrue(payload.startsWith("{\"request_type\": \"transaction\","));
+        assertTrue(payload.contains("\"destination\": \"someotherClinet\","));
+        // Assert both signatures are present (since now they are appended, not in JSON)
         assertTrue(payload.contains("my_signature:mysig"));
         assertTrue(payload.contains("partner_signature:partnersig"));
         System.out.println("[testSendTransaction] All assertions passed.");
@@ -118,9 +121,9 @@ public class ClientOperationsTest {
         Request req = requestList.get(0);
         String payload = new String(req.getDataFile(), java.nio.charset.StandardCharsets.UTF_8);
         System.out.println("[testGetTransactionById] Payload: " + payload);
-        assertTrue(payload.contains("request_type:getById"));
+        assertTrue(payload.contains("\"request_type\":\"getById\""));
         assertEquals("getById", extractRequestType(payload));
-        assertTrue(payload.contains("trasaction_id: 123"));
+        assertTrue(payload.contains("\"transaction_id\":123"));
         System.out.println("[testGetTransactionById] All assertions passed.");
     }
 
@@ -133,7 +136,7 @@ public class ClientOperationsTest {
         Request req = requestList.get(0);
         String payload = new String(req.getDataFile(), java.nio.charset.StandardCharsets.UTF_8);
         System.out.println("[testGetAll] Payload: " + payload);
-        assertTrue(payload.contains("request_type:getAll"));
+        assertTrue(payload.contains("\"request_type\":\"getAll\""));
         assertEquals("getAll", extractRequestType(payload));
         System.out.println("[testGetAll] All assertions passed.");
     }
@@ -147,9 +150,9 @@ public class ClientOperationsTest {
         Request req = requestList.get(0);
         String payload = new String(req.getDataFile(), java.nio.charset.StandardCharsets.UTF_8);
         System.out.println("[testGetShares] Payload: " + payload);
-        assertTrue(payload.contains("request_type:getShares"));
+        assertTrue(payload.contains("\"request_type\":\"getShares\""));
         assertEquals("getShares", extractRequestType(payload));
-        assertTrue(payload.contains("transaction_id: 456"));
+        assertTrue(payload.contains("\"transaction_id\":456"));
         System.out.println("[testGetShares] All assertions passed.");
     }
 
@@ -162,9 +165,9 @@ public class ClientOperationsTest {
         Request req = requestList.get(0);
         String payload = new String(req.getDataFile(), java.nio.charset.StandardCharsets.UTF_8);
         System.out.println("[testGetSharesBy] Payload: " + payload);
-        assertTrue(payload.contains("request_type:getSharesBy"));
+        assertTrue(payload.contains("\"request_type\":\"getSharesBy\""));
         assertEquals("getSharesBy", extractRequestType(payload));
-        assertTrue(payload.contains("shared_by: alice"));
+        assertTrue(payload.contains("\"shared_by\":\"alice\""));
         System.out.println("[testGetSharesBy] All assertions passed.");
     }
 
@@ -177,9 +180,9 @@ public class ClientOperationsTest {
         Request req = requestList.get(0);
         String payload = new String(req.getDataFile(), java.nio.charset.StandardCharsets.UTF_8);
         System.out.println("[testGetRecentTransactionsSince] Payload: " + payload);
-        assertTrue(payload.contains("request_type:getRecentTransactions"));
+        assertTrue(payload.contains("\"request_type\":\"getRecentTransactions\""));
         assertEquals("getRecentTransactions", extractRequestType(payload));
-        assertTrue(payload.contains("since: 123456789"));
+        assertTrue(payload.contains("\"since\":123456789"));
         System.out.println("[testGetRecentTransactionsSince] All assertions passed.");
     }
 
@@ -303,10 +306,10 @@ public class ClientOperationsTest {
         // Set specific mock for this test
         reset(com.chainofproduct.utils.ApiCalls.class);
         when(com.chainofproduct.utils.ApiCalls.actAsSender(anyString(), anyInt(), anyString(), anyInt(), anyString(), any(byte[].class)))
-            .thenReturn("{signature:BUYER_SIG}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            .thenReturn("{\"signature\":\"BUYER_SIG\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         String[] sigs = mockOps.obtainDoubleSignature(transactionData, "host", 12345, "buyer42", true);
-        assertNotNull(sigs);
+        assertNotNull("Signature array should not be null", sigs);
         assertEquals(2, sigs.length);
         assertEquals("SELLER_SIG", sigs[0]);
         assertEquals("BUYER_SIG", sigs[1]);

@@ -23,7 +23,8 @@ public class SignatureRequestListener implements Runnable {
     }
 
     public void start() {
-        listenerThread = new Thread(this, "SignatureRequestListener");
+        listenerThread = new Thread(() -> this.run(), "SignatureRequestListener");
+        listenerThread.setDaemon(true);
         listenerThread.start();
     }
 
@@ -31,6 +32,12 @@ public class SignatureRequestListener implements Runnable {
         running = false;
         if (listenerThread != null) {
             listenerThread.interrupt();
+        }
+    }
+
+    public void join(long timeout) throws InterruptedException {
+        if (listenerThread != null) {
+            listenerThread.join(timeout);
         }
     }
 

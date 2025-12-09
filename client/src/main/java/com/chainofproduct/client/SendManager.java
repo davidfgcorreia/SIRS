@@ -10,6 +10,7 @@ public class SendManager implements Runnable {
     private final Object sendLock;
     private volatile boolean running = true;
     private final ClientResponseHandler responseHandler;
+    private Thread sendManagerThread;
 
     public SendManager(BlockingQueue<Request> sendQueue, Object sendLock) {
         this.sendQueue = sendQueue;
@@ -17,10 +18,25 @@ public class SendManager implements Runnable {
         this.responseHandler = new ClientResponseHandler();
     }
 
+    public void start() {
+        sendManagerThread = new Thread(() -> this.run(), "SendManager");
+        sendManagerThread.setDaemon(true);
+        sendManagerThread.start();
+    }
+
     public void stop() {
         running = false;
         synchronized (sendLock) {
             sendLock.notifyAll();
+        }
+        if (sendManagerThread != null) {
+            sendManagerThread.interrupt();
+        }
+    }
+
+    public void join(long timeout) throws InterruptedException {
+        if (sendManagerThread != null) {
+            sendManagerThread.join(timeout);
         }
     }
 

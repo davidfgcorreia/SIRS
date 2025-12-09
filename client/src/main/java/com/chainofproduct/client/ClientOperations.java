@@ -13,6 +13,7 @@ public class ClientOperations {
     private final String receiverEntity;
     private final String serverHost;
     private final int serverPort;
+    private final int serverCertPort;
 
     public ClientOperations(BlockingQueue<Request> sendQueue, Object sendLock, String clientName) {
         this.sendQueue = sendQueue;
@@ -29,71 +30,19 @@ public class ClientOperations {
         }
         this.serverHost = destInfo.ip;
         this.serverPort = destInfo.port;
-        
-        
+        this.serverCertPort = destInfo.certPort;
 
-
-        // Ensure server cert/pubkey is present (exchange only once)
         try {
-            // 1. Generate/load EC keypair for this client
-            String ecKeystorePath = this.clientName + "-ec-keystore.p12";
-            String ecAlias = this.clientName + "-ec";
-            String ecPassword = "changeit";
-            java.security.KeyPair ecKeyPair;
-            java.io.File ecKeystoreFile = new java.io.File(ecKeystorePath);
-            if (ecKeystoreFile.exists()) {
-                try {
-                    java.security.PrivateKey priv = com.chainofproduct.utils.KeyTransmission.getMyECPrivateKey(ecKeystorePath, ecAlias);
-                    java.security.KeyStore ks = java.security.KeyStore.getInstance("PKCS12");
-                    try (java.io.FileInputStream fis = new java.io.FileInputStream(ecKeystorePath)) {
-                        ks.load(fis, ecPassword.toCharArray());
-                    }
-                    java.security.PublicKey pub = ks.getCertificate(ecAlias).getPublicKey();
-                    ecKeyPair = new java.security.KeyPair(pub, priv);
-                } catch (Exception e) {
-                    System.err.println("Error loading EC keypair, regenerating: " + e.getMessage());
-                    ecKeyPair = com.chainofproduct.utils.KeyTransmission.generateECKeyPairAndStore(ecAlias, ecKeystorePath, ecPassword);
-                }
-            } else {
-                ecKeyPair = com.chainofproduct.utils.KeyTransmission.generateECKeyPairAndStore(ecAlias, ecKeystorePath, ecPassword);
-            }
-
-            // 2. Load this client's RSA public key and certificate
-            String myKeystorePath = this.clientName + "-keystore.p12";
-            String myKeystorePassword = "changeit";
-            java.security.KeyStore myKeystore = com.chainofproduct.utils.Cerificates.getKeystore(this.clientName, myKeystorePassword);
-            if (myKeystore == null) {
-                throw new java.io.FileNotFoundException("Keystore not found: " + myKeystorePath);
-            }
-            java.security.cert.Certificate myCert = myKeystore.getCertificate(this.clientName);
-            if (myCert == null) {
-                throw new java.security.cert.CertificateException("No certificate found for alias: " + this.clientName);
-            }
-            java.security.PublicKey myRSAPubKey = myCert.getPublicKey();
-
-            // 3. Call sendRSAKeyAndCertWithECDH to the server
-            com.chainofproduct.utils.KeyTransmission.sendRSAKeyAndCertWithECDH(
-                this.clientName, // storePrefix
-                this.clientName, // myAlias
-                this.receiverEntity, // peerAlias (server)
-                this.serverHost,
-                (destInfo != null && destInfo.certPort != 0) ? destInfo.certPort : (this.serverPort + 1000), // Use certPort if available, else fallback
-                ecKeyPair,
-                myRSAPubKey,
-                (java.security.cert.X509Certificate) myCert
-            );
+            com.chainofproduct.utils.Cerificates.verifyCertificaAndObtain(this.clientName, "server", this.serverHost, this.serverCertPort);
         } catch (Exception e) {
-            System.err.println("Certificate verification/exchange with server failed: " + e.getMessage());
+            System.err.println("Initial server certificate verification/exchange failed: " + e.getMessage());
         }
     }
 
     
     // Enqueue a transaction send request (Type 1)
     public void sendtrsaction(String dataFile, String destination) {
-
-        System.out.println("[sendtrsaction] BEGIN");
-        // Resolve destination info
-        String payload; // Will be set after isSeller/isBuyer are determined
+        String payload;
         byte[] fileBytes = null;
         java.nio.file.Path path;
         try {
@@ -126,12 +75,18 @@ public class ClientOperations {
         boolean isBuyer = this.clientName.equalsIgnoreCase(buyer);
         // Now that isSeller and isBuyer are defined, set the payload with role
         String role = isSeller ? "seller" : (isBuyer ? "buyer" : "unknown");
-        payload = "{request_type: transaction, source: " + this.clientName + ", destination: " + destination + ", role: " + role + "}";
+        payload = "{\"request_type\": \"transaction\", \"source\": \"" + this.clientName + "\", \"destination\": \"" + destination + "\", \"role\": \"" + role + "\"}";
         // Set partnerName: if I'm buyer, partner is seller; if I'm seller, partner is buyer
-        String partnerName = isBuyer ? seller : (isSeller ? buyer : destination);
+        String partnerName;
+        if (isSeller) {
+            partnerName = buyer;
+        } else if (isBuyer) {
+            partnerName = seller;
+        } else {
+            partnerName = "unknown";
+        }
 
         System.out.println("[sendtrsaction] PartnerName: " + partnerName);
-
         System.out.println("[sendtrsaction] dataFile: " + dataFile);
         System.out.println("[sendtrsaction] destination: " + destination);
         if (!isSeller && !isBuyer) {
@@ -159,7 +114,6 @@ public class ClientOperations {
             }
         }
         byte[] toSend;
-        System.out.println("[sendtrsaction] jsonPart: " + jsonPart);
         if (alreadySigned) {
             // File is already double signed, send as is
             System.out.println("[sendtrsaction] isSeller: " + isSeller + ", isBuyer: " + isBuyer);
@@ -172,9 +126,10 @@ public class ClientOperations {
             com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = com.chainofproduct.utils.ResolveDestinations.resolve(partnerName);
             String partnerHost = destInfo.ip;
             int partnerPort = destInfo.signaturePort;
+            int partnerCertPort = destInfo.certPort;
             // Ensure receiver cert/pubkey is present
             try {
-                com.chainofproduct.utils.Cerificates.verifyCertificaAndObtain(this.clientName, destination, partnerHost, partnerPort);
+                com.chainofproduct.utils.Cerificates.verifyCertificaAndObtain(this.clientName, destination, partnerHost, partnerCertPort);
             } catch (Exception e) {
                 System.err.println("Certificate verification/exchange failed: " + e.getMessage());
                 return;
@@ -237,7 +192,7 @@ public class ClientOperations {
 
     // Enqueue a getById request (Type 3)
     public void gettransactionById(long id) {
-        String payload = "{request_type:getById, servername: " + this.clientName +  ", trasaction_id: " + id + "}";
+        String payload = "{\"request_type\":\"getById\",\"servername\":\"" + this.clientName + "\",\"transaction_id\":" + id + "}";
         Request req = new Request(
             this.serverHost,
             this.serverPort,
@@ -253,7 +208,7 @@ public class ClientOperations {
     // Enqueue a getAll request (Type 4)
     public void getAll() {
         System.out.println("[sendtrsaction] Request created: host=" + this.serverHost + ", port=" + this.serverPort + ", entityType=" + this.entityType + ", clientNum=" + this.clientNum + ", receiverEntity=" + this.receiverEntity );
-        String payload = "{request_type:getAll, servername: " + this.clientName + "}";
+        String payload = "{\"request_type\":\"getAll\",\"servername\":\"" + this.clientName + "\"}";
         System.out.println("[sendtrsaction] END");
         Request req = new Request(
             this.serverHost,
@@ -269,7 +224,7 @@ public class ClientOperations {
 
     // Enqueue a getShares request (Type 5)
     public void getShares(long tid) {
-        String payload = "{request_type:getShares, servername: " + this.clientName + ", transaction_id: " + tid + "}";
+        String payload = "{\"request_type\":\"getShares\",\"servername\":\"" + this.clientName + "\",\"transaction_id\":" + tid + "}";
         Request req = new Request(
             this.serverHost,
             this.serverPort,
@@ -284,7 +239,7 @@ public class ClientOperations {
 
     // Enqueue a getSharesBy request (Type 6)
     public void getSharesBy(long tid, String sharedBy) {
-        String payload = "{request_type:getSharesBy, servername: " + this.clientName + ", transaction_id: " + tid + ", shared_by: " + sharedBy + "}";
+        String payload = "{\"request_type\":\"getSharesBy\",\"servername\":\"" + this.clientName + "\",\"transaction_id\":" + tid + ",\"shared_by\":\"" + sharedBy + "\"}";
         Request req = new Request(
             this.serverHost,
             this.serverPort,
@@ -299,7 +254,7 @@ public class ClientOperations {
 
         // Enqueue a getRecentTransactions request (Type 7)
     public void getRecentTransactionsSince(long sinceTimestamp) {
-        String payload = "{request_type:getRecentTransactions, servername: " + this.clientName + ", since: " + sinceTimestamp + "}";
+        String payload = "{\"request_type\":\"getRecentTransactions\",\"servername\":\"" + this.clientName + "\",\"since\":" + sinceTimestamp + "}";
         Request req = new Request(
             this.serverHost,
             this.serverPort,
@@ -325,7 +280,7 @@ public class ClientOperations {
         // Request buyer's signature
         // Add role field to signatureRequest payload
         String role = isSeller ? "seller" : "buyer";
-        String payload = "{request_type:signatureRequest, source: " + this.clientName + ", mySignature: " + mySignature + ", role: " + role + "}";
+        String payload = "{\"request_type\":\"signatureRequest\",\"source\":\"" + this.clientName + "\",\"mySignature\":\"" + mySignature + "\",\"role\":\"" + role + "\"}";
         byte[] payloadBytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         byte[] combined = new byte[payloadBytes.length + transactionData.length];
         System.arraycopy(payloadBytes, 0, combined, 0, payloadBytes.length);
@@ -349,7 +304,7 @@ public class ClientOperations {
         }
         
         String response = new String(responseBytes, java.nio.charset.StandardCharsets.UTF_8);
-        String partnerSignature = extractFieldValue(response, "signature");
+        String partnerSignature = extractJsonStringField(response, "signature");
         if (partnerSignature == null) {
             System.err.println("Failed to get buyer signature: no signature in response");
             return null;
@@ -452,7 +407,7 @@ public class ClientOperations {
                 System.err.println("[handleSignatureRequest] Failed to write signed transaction file: " + e.getMessage());
             }
 
-            String response = "{signature: " + mySignature + "}";
+            String response = "{\"signature\":\"" + mySignature + "\"}";
             return response.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         } catch (Exception e) {
             System.err.println("Error handling signature request: " + e.getMessage());

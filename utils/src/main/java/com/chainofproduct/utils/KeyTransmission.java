@@ -11,8 +11,13 @@ import java.security.spec.X509EncodedKeySpec;
 
 public class KeyTransmission {
 
+	private java.net.ServerSocket listenerSocket;
+	private java.util.concurrent.atomic.AtomicBoolean listenerRunning;
+
 	// Default constructor
 	public KeyTransmission() {
+		listenerRunning = new java.util.concurrent.atomic.AtomicBoolean(false);
+		listenerSocket = null;
 	}
 
 	public static boolean VERBOSE = true;
@@ -21,34 +26,30 @@ public class KeyTransmission {
 			 * @param storePrefix Prefix for truststore and EC keystore file names
 			 * @param listenPort Port to listen on
 			 */
-			public void ensureECKeyAndStartListener(String storePrefix, int listenPort) throws Exception {
-				String ecKeystorePath = storePrefix + "-ec-keystore.p12";
-				String ecAlias = storePrefix + "-ec";
-				String ecPassword = "changeit";
-				KeyPair ecKeyPair;
-				java.io.File ecKeystoreFile = new java.io.File(ecKeystorePath);
-				if (ecKeystoreFile.exists()) {
-					try {
-						java.security.PrivateKey priv = getMyECPrivateKey(ecKeystorePath, ecAlias);
-						java.security.KeyStore ks = java.security.KeyStore.getInstance("PKCS12");
-						try (java.io.FileInputStream fis = new java.io.FileInputStream(ecKeystorePath)) {
-							ks.load(fis, ecPassword.toCharArray());
-						}
-						java.security.PublicKey pub = ks.getCertificate(ecAlias).getPublicKey();
-						ecKeyPair = new KeyPair(pub, priv);
-					} catch (Exception e) {
-						System.err.println("Error loading EC keypair, regenerating: " + e.getMessage());
-						ecKeyPair = generateECKeyPairAndStore(ecAlias, ecKeystorePath, ecPassword);
+		public void ensureECKeyAndStartListener(String storePrefix, int listenPort) throws Exception {
+			String ecKeystorePath = storePrefix + "-ec-keystore.p12";
+			String ecAlias = storePrefix + "-ec";
+			String ecPassword = "changeit";
+			KeyPair ecKeyPair;
+			java.io.File ecKeystoreFile = new java.io.File(ecKeystorePath);
+			if (ecKeystoreFile.exists()) {
+				try {
+					java.security.PrivateKey priv = getMyECPrivateKey(ecKeystorePath, ecAlias);
+					java.security.KeyStore ks = java.security.KeyStore.getInstance("PKCS12");
+					try (java.io.FileInputStream fis = new java.io.FileInputStream(ecKeystorePath)) {
+						ks.load(fis, ecPassword.toCharArray());
 					}
-				} else {
+					java.security.PublicKey pub = ks.getCertificate(ecAlias).getPublicKey();
+					ecKeyPair = new KeyPair(pub, priv);
+				} catch (Exception e) {
+					System.err.println("Error loading EC keypair, regenerating: " + e.getMessage());
 					ecKeyPair = generateECKeyPairAndStore(ecAlias, ecKeystorePath, ecPassword);
 				}
-				this.startKeyExchangeListener(storePrefix, listenPort, ecKeyPair);
+			} else {
+				ecKeyPair = generateECKeyPairAndStore(ecAlias, ecKeystorePath, ecPassword);
 			}
-		// Soft shutdown flag for the key exchange listener
-		private final java.util.concurrent.atomic.AtomicBoolean listenerRunning = new java.util.concurrent.atomic.AtomicBoolean(false);
-		private java.net.ServerSocket listenerSocket = null;
-
+			this.startKeyExchangeListener(storePrefix, listenPort, ecKeyPair);
+		}
 		/**
 		 * Starts a listening channel for key exchange requests on the specified port.
 		 * Calls receiveRSAKeyAndCertWithECDH for each incoming connection.
@@ -155,7 +156,6 @@ public class KeyTransmission {
 		String truststoreFile = storePrefix + "-truststore.p12";
 		String truststorePassword = "changeit";
 		// Store the received peer certificate in our truststore
-		// Always use senderAlias as the truststore alias (matches test expectation)
 		Cerificates.storeTruststore(truststoreFile, truststorePassword, new String[]{senderAlias}, new java.security.cert.X509Certificate[]{(java.security.cert.X509Certificate)peerCert});
 
 		String pubkeyTruststoreFile = storePrefix + "-truststore-pubkeys.p12";
