@@ -280,26 +280,33 @@ public class ServerOperations {
             storedTransactionIds.add(id);
             
             long shareTime = System.currentTimeMillis();
-            String shareData = String.format("%d:%s:server", id, seller);
-            String sellerShareSig = signData(shareData.getBytes(), serverPrivateKey);
-            
+            // Record shares so DB contains who is the sharing target and who the original requester (destination)
+            // Per request: do not indicate "server" as the actor. Instead, set `sharedBy` to the person
+            // who is the target of the share (seller/buyer) and add a `destination` field with the client (source)
+            String sellerShareData = String.format("%d:%s:%s", id, seller, source);
+            String sellerShareSig = signData(sellerShareData.getBytes(), serverPrivateKey);
+
             ObjectNode shareRequest1 = jsonMapper.createObjectNode();
             shareRequest1.put("sql", 1);
             shareRequest1.put("transactionId", id);
             shareRequest1.put("share", seller);
-            shareRequest1.put("sharedBy", "server");
+            // Who the share record refers to as the actor (per request)
+            shareRequest1.put("sharedBy", seller);
+            // Destination is the original client who made the request
+            shareRequest1.put("destination", source);
             shareRequest1.put("timestamp", shareTime);
             shareRequest1.put("signature", sellerShareSig);
             sendDatabaseRequest(shareRequest1);
 
-            shareData = String.format("%d:%s:server", id, buyer);
-            String buyerShareSig = signData(shareData.getBytes(), serverPrivateKey);
+            String buyerShareData = String.format("%d:%s:%s", id, buyer, source);
+            String buyerShareSig = signData(buyerShareData.getBytes(), serverPrivateKey);
 
             ObjectNode shareRequest2 = jsonMapper.createObjectNode();
             shareRequest2.put("sql", 1);
             shareRequest2.put("transactionId", id);
             shareRequest2.put("share", buyer);
-            shareRequest2.put("sharedBy", "server");
+            shareRequest2.put("sharedBy", buyer);
+            shareRequest2.put("destination", source);
             shareRequest2.put("timestamp", shareTime);
             shareRequest2.put("signature", buyerShareSig);
             sendDatabaseRequest(shareRequest2);
