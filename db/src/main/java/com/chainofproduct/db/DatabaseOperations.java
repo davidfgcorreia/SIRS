@@ -143,6 +143,72 @@ public class DatabaseOperations {
     }
   }
 
+  public static void addGroup(String name, String leader) throws SQLException {
+    String sql = "INSERT INTO groups (name, leader) VALUES (?, ?) ON CONFLICT (name) DO NOTHING";
+    try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
+        PreparedStatement pstmt = conn.prepareStatement(sql)) {
+      pstmt.setString(1, name);
+      pstmt.setString(2, leader);
+    }
+  }
+
+  public static String getGroupLeader(String name) throws SQLException {
+    String sql = "SELECT leader FROM groups WHERE name = ?";
+    try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
+        PreparedStatement pstmt = conn.prepareStatement(sql)) {
+      pstmt.setString(1, name);
+
+      try (ResultSet rs = pstmt.executeQuery()) {
+        if (rs.next()) {
+          return rs.getString("leader");
+        }
+      }
+    }
+    return null;
+  }
+
+  public static void addGroupElements(String name, List<String> additions) throws SQLException {
+    String sql = "INSERT INTO group_members (name, company) VALUES (?, ?)";
+    try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
+        PreparedStatement pstmt = conn.prepareStatement(sql)) {
+      for (String addition : additions) {
+        pstmt.setString(1, name);
+        pstmt.setString(2, addition);
+        pstmt.addBatch();
+      }
+      pstmt.executeBatch();
+    }
+  }
+
+  public static void removeGroupElements(String name, List<String> removals) throws SQLException {
+    String sql = "DELETE FROM group_members WHERE name = ? AND company = ?";
+    try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
+        PreparedStatement pstmt = conn.prepareStatement(sql)) {
+      for (String removal : removals) {
+        pstmt.setString(1, name);
+        pstmt.setString(2, removal);
+        pstmt.addBatch();
+      }
+      pstmt.executeBatch();
+    }
+  }
+
+  public static List<String> getGroupMembers(String name) throws SQLException {
+    String sql = "SELECT company FROM group_members WHERE name = ?";
+    List<String> response = new ArrayList<>();
+    try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
+        PreparedStatement pstmt = conn.prepareStatement(sql)) {
+      pstmt.setString(1, name);
+
+      try (ResultSet rs = pstmt.executeQuery()) {
+        if (rs.next()) {
+          response.add(rs.getString("company"));
+        }
+      }
+    }
+    return response;
+  }
+
   // TransactionRecord inner class for returning transaction data
   public static class TransactionRecord {
     public final long id;

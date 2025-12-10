@@ -1,7 +1,7 @@
 DROP TABLE IF EXISTS transaction;
 DROP TABLE IF EXISTS transaction_shares;
 DROP TABLE IF EXISTS destination_ips;
-
+DROP TABLE IF EXISTS groups;
 -- create table transaction
 CREATE TABLE IF NOT EXISTS transaction (
     id BIGINT PRIMARY KEY, -- FIXME: why shouldn't ids be SERIAL?
@@ -27,3 +27,18 @@ CREATE TABLE IF NOT EXISTS destination_ips (
     port INTEGER NOT NULL,
     public_key TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS groups (
+    name VARCHAR(255) PRIMARY KEY,
+    leader VARCHAR(255) NOT NULL,
+    FOREIGN KEY(leader) REFERENCES destination_ips(company) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS group_members (
+    name VARCHAR(255) NOT NULL,
+    company VARCHAR(255) NOT NULL,
+    PRIMARY KEY (name, company),
+    FOREIGN KEY(name) REFERENCES groups(name) ON DELETE CASCADE,
+    FOREIGN KEY(company) REFERENCES destination_ips(company) ON DELETE CASCADE
+);
+

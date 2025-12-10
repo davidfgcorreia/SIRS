@@ -164,6 +164,9 @@ public class ServerExecutorImpl implements ServerExecutor {
           return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
 
+      case 8:
+        return null;
+
       default:
         // unrecognizable command (sql)
         System.err.println("unrecognizable command");
