@@ -33,7 +33,7 @@ public class ServerMainTest {
     private static MockedStatic<Cerificates> certificatesMock;
     private static File tempKeystoreFile;
     private static File tempTruststoreFile;
-    private static SecretKey mockStorageKey; //AES key
+    
     private static KeyPair testKeyPair; //RSA key pair
     
     @BeforeClass
@@ -45,8 +45,7 @@ public class ServerMainTest {
         keyGen.initialize(2048);
         testKeyPair = keyGen.generateKeyPair();
         
-        // Generate a real AES key
-        mockStorageKey = javax.crypto.KeyGenerator.getInstance("AES").generateKey();
+        // (storage key not required in current server implementation)
         
         // Create temporary keystore and truststore files for testing
         tempKeystoreFile = File.createTempFile("test-keystore", ".p12");
@@ -62,7 +61,6 @@ public class ServerMainTest {
         // Mock static methods
         cryptoUtilsMock = mockStatic(CryptoUtils.class);
         cryptoUtilsMock.when(() -> CryptoUtils.generateNonce()).thenReturn("test-nonce".getBytes());
-        cryptoUtilsMock.when(() -> CryptoUtils.readKeyFromFile(anyString(), eq("AES"))).thenReturn(mockStorageKey);
         
         apiCallsMock = mockStatic(ApiCalls.class);
         

@@ -1,9 +1,9 @@
 package com.chainofproduct.server;
 
-import com.chainofproduct.utils.CryptoUtils;
 import com.chainofproduct.utils.ApiCalls;
 
 import org.junit.BeforeClass;
+import org.junit.Before;
 import org.junit.After;
 import org.junit.Test;
 
@@ -13,7 +13,7 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Signature;
 import java.util.Base64;
-import javax.crypto.SecretKey;
+
 
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
@@ -21,13 +21,11 @@ import static org.mockito.ArgumentMatchers.*;
 import org.mockito.MockedStatic;
 
 public class ServerOperationsTest {
-    private static ServerOperations serverOps;
+    private ServerOperations serverOps;
     private static KeyPair sellerKeyPair;
     private static KeyPair buyerKeyPair;
     private static KeyPair serverKeyPair;
-    private static SecretKey mockStorageKey;
-    private static MockedStatic<CryptoUtils> cryptoUtilsMock;
-    private static MockedStatic<ApiCalls> apiCallsMock;
+    private MockedStatic<ApiCalls> apiCallsMock;
 
     @BeforeClass
     public static void setUp() throws Exception {
@@ -40,54 +38,45 @@ public class ServerOperationsTest {
         buyerKeyPair = keyGen.generateKeyPair();
         serverKeyPair = keyGen.generateKeyPair();
         
-        // Generate a real AES key before mocking
-        mockStorageKey = javax.crypto.KeyGenerator.getInstance("AES").generateKey();
+        // Key pairs generated once for all tests; per-test mocks and ServerOperations instance
+        // will be created in @Before to ensure deterministic mock behavior.
         
-        // Mock static methods
-        cryptoUtilsMock = mockStatic(CryptoUtils.class);
-        cryptoUtilsMock.when(() -> CryptoUtils.readKeyFromFile(anyString(), eq("AES"))).thenReturn(mockStorageKey);
-        cryptoUtilsMock.when(() -> CryptoUtils.generateAESKey(anyInt())).thenReturn(mockStorageKey);
-        cryptoUtilsMock.when(() -> CryptoUtils.encrypt(any(byte[].class), any(SecretKey.class))).thenAnswer(invocation -> {
-            byte[] data = invocation.getArgument(0);
-            if (data == null) {
-                return new byte[]{1, 2, 3, 4}; // Return dummy data if null
-            }
-            return data; // Return as-is for testing
-        });
-        
+        System.out.println("[SETUP] ServerOperationsTest initialized");
+    }
+
+    @Before
+    public void setUpTest() throws Exception {
+        // Create per-test static mock for ApiCalls
         apiCallsMock = mockStatic(ApiCalls.class);
-        
-        // Create a subclass to override private key loading methods
+        // Provide a safe default for any call (some tests rely on null/unknown dbHost),
+        // returning an empty JSON object to avoid null responses.
+        apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), any(), anyInt(), any(), any(byte[].class)))
+            .thenReturn("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        // Create a fresh ServerOperations instance for each test overriding keystore loaders
         serverOps = new ServerOperations() {
             public PrivateKey loadPrivateKeyFromKeystore(String path, String password, String alias) throws Exception {
                 return serverKeyPair.getPrivate();
             }
-            
+
             public PublicKey loadPublicKeyFromKeystore(String path, String password, String alias) throws Exception {
                 if (alias.contains("seller") || alias.contains("client42")) return sellerKeyPair.getPublic();
                 if (alias.contains("buyer") || alias.contains("client43")) return buyerKeyPair.getPublic();
                 return serverKeyPair.getPublic();
             }
         };
-        
-        System.out.println("[SETUP] ServerOperationsTest initialized");
     }
 
     @After
     public void tearDown() {
         // Reset mocks between tests
-        apiCallsMock.clearInvocations();
+        if (apiCallsMock != null) {
+            apiCallsMock.clearInvocations();
+            apiCallsMock.close();
+            apiCallsMock = null;
+        }
     }
     
-    @org.junit.AfterClass
-    public static void tearDownClass() {
-        if (cryptoUtilsMock != null) {
-            cryptoUtilsMock.close();
-        }
-        if (apiCallsMock != null) {
-            apiCallsMock.close();
-        }
-    }
 
     // Helper method to create signed transaction request
     private byte[] createSignedTransactionRequest(String source, long id, String seller, String buyer, 
@@ -127,7 +116,7 @@ public class ServerOperationsTest {
         System.out.println("[TEST] testHandleTransactionRequestValidSeller");
         
         // Mock database responses
-        apiCallsMock.when(() -> ApiCalls.actAsSender(anyString(), anyInt(), anyString(), anyInt(), 
+        apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), anyString(), anyInt(), 
             anyString(), any(byte[].class))).thenReturn("{\"success\":true}".getBytes());
         
         byte[] request = createSignedTransactionRequest("client42", 1001L, "client42", "client43", 
@@ -149,7 +138,7 @@ public class ServerOperationsTest {
     public void testHandleTransactionRequestValidBuyer() throws Exception {
         System.out.println("[TEST] testHandleTransactionRequestValidBuyer");
         
-        apiCallsMock.when(() -> ApiCalls.actAsSender(anyString(), anyInt(), anyString(), anyInt(), 
+        apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), anyString(), anyInt(), 
             anyString(), any(byte[].class))).thenReturn("{\"success\":true}".getBytes());
         
         byte[] request = createSignedTransactionRequest("client43", 1002L, "client42", "client43", 
@@ -210,7 +199,7 @@ public class ServerOperationsTest {
         
         // Mock database to return transaction where client42 is seller
         String dbResponse = "{\"id\":1005,\"seller\":\"client42\",\"buyer\":\"client43\"}";
-        apiCallsMock.when(() -> ApiCalls.actAsSender(anyString(), anyInt(), anyString(), anyInt(), 
+        apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), anyString(), anyInt(), 
             anyString(), any(byte[].class))).thenReturn(dbResponse.getBytes());
         
         // Create share request
@@ -242,7 +231,7 @@ public class ServerOperationsTest {
         
         // Mock database to return transaction where client44 is NOT seller or buyer
         String dbResponse = "{\"id\":1006,\"seller\":\"client42\",\"buyer\":\"client43\"}";
-        apiCallsMock.when(() -> ApiCalls.actAsSender(anyString(), anyInt(), anyString(), anyInt(), 
+        apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), anyString(), anyInt(), 
             anyString(), any(byte[].class))).thenReturn(dbResponse.getBytes());
         
         String shareData = "1006:client45:client44";
@@ -275,7 +264,7 @@ public class ServerOperationsTest {
         String transactionResponse = "{\"id\":1007,\"timestamp\":1234567890,\"seller\":\"client42\",\"buyer\":\"client43\",\"product\":\"Platinum\",\"units\":100,\"amount\":500000,\"sellerSignature\":\"sig1\",\"buyerSignature\":\"sig2\"}";
         String sharesResponse = "[\"client42\",\"client43\"]";
         
-        apiCallsMock.when(() -> ApiCalls.actAsSender(anyString(), anyInt(), anyString(), anyInt(), 
+        apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), anyString(), anyInt(), 
             anyString(), any(byte[].class)))
             .thenReturn(transactionResponse.getBytes())
             .thenReturn(sharesResponse.getBytes());
@@ -302,7 +291,7 @@ public class ServerOperationsTest {
         String transactionResponse = "{\"id\":1008,\"seller\":\"client42\",\"buyer\":\"client43\"}";
         String sharesResponse = "[\"client42\",\"client43\"]";
         
-        apiCallsMock.when(() -> ApiCalls.actAsSender(anyString(), anyInt(), anyString(), anyInt(), 
+        apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), anyString(), anyInt(), 
             anyString(), any(byte[].class)))
             .thenReturn(transactionResponse.getBytes())
             .thenReturn(sharesResponse.getBytes());
@@ -327,7 +316,7 @@ public class ServerOperationsTest {
         // Mock database response with multiple transactions
         String allTransactionsResponse = "[{\"id\":1009,\"timestamp\":1234567890,\"seller\":\"client42\",\"buyer\":\"client43\",\"product\":\"Zinc\",\"units\":200,\"amount\":100000,\"sellerSignature\":\"sig1\",\"buyerSignature\":\"sig2\"},{\"id\":1010,\"timestamp\":1234567891,\"seller\":\"client42\",\"buyer\":\"client44\",\"product\":\"Nickel\",\"units\":150,\"amount\":80000,\"sellerSignature\":\"sig3\",\"buyerSignature\":\"sig4\"}]";
         
-        apiCallsMock.when(() -> ApiCalls.actAsSender(anyString(), anyInt(), anyString(), anyInt(), 
+        apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), anyString(), anyInt(), 
             anyString(), any(byte[].class))).thenReturn(allTransactionsResponse.getBytes());
         
         String request = "{request_type:getAll, source:client42}";
@@ -354,7 +343,7 @@ public class ServerOperationsTest {
         String sharesListResponse = "[\"client42\",\"client43\",\"client44\"]";
         String shareRecordsResponse = "[{\"share\":\"client42\",\"sharedBy\":\"server\",\"timestamp\":1234567890,\"signature\":\"sig1\"},{\"share\":\"client43\",\"sharedBy\":\"server\",\"timestamp\":1234567890,\"signature\":\"sig2\"},{\"share\":\"client44\",\"sharedBy\":\"client42\",\"timestamp\":1234567900,\"signature\":\"sig3\"}]";
         
-        apiCallsMock.when(() -> ApiCalls.actAsSender(anyString(), anyInt(), anyString(), anyInt(), 
+        apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), anyString(), anyInt(), 
             anyString(), any(byte[].class)))
             .thenReturn(transactionResponse.getBytes())
             .thenReturn(sharesListResponse.getBytes())
@@ -382,7 +371,7 @@ public class ServerOperationsTest {
         String sharesListResponse = "[\"client42\",\"client43\",\"client44\"]";
         String sharesByResponse = "[{\"share\":\"client44\",\"sharedBy\":\"client42\",\"timestamp\":1234567900,\"signature\":\"sig1\"}]";
         
-        apiCallsMock.when(() -> ApiCalls.actAsSender(anyString(), anyInt(), anyString(), anyInt(), 
+        apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), anyString(), anyInt(), 
             anyString(), any(byte[].class)))
             .thenReturn(sharesListResponse.getBytes())
             .thenReturn(sharesByResponse.getBytes());

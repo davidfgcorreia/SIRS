@@ -1,11 +1,6 @@
 package com.chainofproduct.server;
 
-import com.chainofproduct.utils.CryptoUtils;
 import com.chainofproduct.utils.ApiCalls;
-
-import javax.crypto.SecretKey;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.util.Base64;
@@ -21,7 +16,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
  */
 public class ServerOperations {
     private final PrivateKey serverPrivateKey;
-    private final SecretKey storageKey; // For encrypting transactions at rest (SR1)
+    
     private final String dbHost;
     private final int dbPort;
     private final ObjectMapper jsonMapper;
@@ -34,9 +29,7 @@ public class ServerOperations {
         this.serverPrivateKey = loadPrivateKeyFromKeystore("server-keystore.p12", keystorePassword, "server");
         System.out.println("Server private key loaded");
         
-        // Load or generate storage encryption key for database
-        this.storageKey = loadOrGenerateStorageKey(); // keys/storage-key.aes
-        System.out.println("Storage encryption key ready");
+        // Storage encryption removed: transactions are stored without at-rest encryption
         
         // Load database connection info from config using ResolveDestinations
         System.out.println("Loading database configuration...");
@@ -66,26 +59,7 @@ public class ServerOperations {
         return (value != null && !value.isEmpty()) ? value : defaultValue;
     }
     
-    /**
-     * Load or generate AES key for encrypting transactions at rest (SR1).
-     */
-    private SecretKey loadOrGenerateStorageKey() throws Exception {
-        String keyPath = "keys/storage-key.aes";
-        try {
-            SecretKey key = CryptoUtils.readKeyFromFile(keyPath, "AES");
-            System.out.println("Loaded existing storage key from " + keyPath);
-            return key;
-        } catch (Exception e) {
-            // Generate new key if doesn't exist
-            System.out.println("Generating new storage key...");
-            SecretKey key = CryptoUtils.generateAESKey(256);
-            String b64 = Base64.getEncoder().encodeToString(key.getEncoded());
-            Files.createDirectories(Paths.get("keys"));
-            Files.writeString(Paths.get(keyPath), b64);
-            System.out.println("Storage key saved to " + keyPath);
-            return key;
-        }
-    }
+    // NOTE: storage key generation/reading removed as at-rest encryption is not used.
 
     /**
      * Main entry point for processing client requests.
@@ -210,10 +184,7 @@ public class ServerOperations {
             String sellerSig = source.equals(seller) ? signature : "";
             String buyerSig = source.equals(buyer) ? signature : "";
             
-            // SR1: Encrypt transaction before storing (confidentiality)
-            byte[] encryptedData = CryptoUtils.encrypt(transactionBytes, storageKey);
-            String encryptedB64 = Base64.getEncoder().encodeToString(encryptedData);
-            
+            // Transactions are stored without at-rest encryption
             // Store in database with signature via TCP (sql=0: insertTransaction)
             ObjectNode dbRequest = jsonMapper.createObjectNode();
             dbRequest.put("sql", 0);
@@ -226,7 +197,7 @@ public class ServerOperations {
             dbRequest.put("amount", amount);
             dbRequest.put("sellerSignature", sellerSig);
             dbRequest.put("buyerSignature", buyerSig);
-            dbRequest.put("encryptedData", encryptedB64);
+            dbRequest.put("data", transactionJson);
             sendDatabaseRequest(dbRequest);
             
             long shareTime = System.currentTimeMillis();
