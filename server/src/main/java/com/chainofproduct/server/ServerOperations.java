@@ -271,7 +271,10 @@ public class ServerOperations {
             dbRequest.put("amount", amount);
             dbRequest.put("sellerSignature", sellerSig);
             dbRequest.put("buyerSignature", buyerSig);
-            dbRequest.put("data", transactionJson);
+            // Store the raw transaction bytes exactly as received (Base64) so the DB receives
+            // the same binary data the client signed. This avoids modifying the transaction
+            // before storage or needing to send separate arguments.
+            dbRequest.put("data", Base64.getEncoder().encodeToString(transactionBytes));
             sendDatabaseRequest(dbRequest);
             // Mark transaction as stored in in-memory cache immediately after DB insert (tests rely on quick in-memory replay protection)
             storedTransactionIds.add(id);
