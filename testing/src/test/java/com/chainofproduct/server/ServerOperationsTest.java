@@ -48,10 +48,87 @@ public class ServerOperationsTest {
     public void setUpTest() throws Exception {
         // Create per-test static mock for ApiCalls
         apiCallsMock = mockStatic(ApiCalls.class);
-        // Provide a safe default for any call (some tests rely on null/unknown dbHost),
-        // returning an empty JSON object to avoid null responses.
+        // Simulate a simple in-memory database per test to make DB behavior deterministic.
+        final java.util.Map<Long, byte[]> txStore = new java.util.HashMap<>();
+        final java.util.Map<Long, java.util.List<byte[]>> shareRecords = new java.util.HashMap<>();
+        final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
         apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), any(), anyInt(), any(), any(byte[].class)))
-            .thenReturn("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            .thenAnswer(invocation -> {
+                Object[] args = invocation.getArguments();
+                byte[] reqBytes = (byte[]) args[5];
+                try {
+                    com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(reqBytes);
+                    int sql = node.has("sql") ? node.get("sql").asInt() : -1;
+                    switch (sql) {
+                        case 0: // insert transaction
+                            long id = node.get("id").asLong();
+                            txStore.put(id, reqBytes);
+                            // create default share records for seller/buyer
+                            java.util.List<byte[]> list = new java.util.ArrayList<>();
+                            list.add(mapper.writeValueAsBytes(java.util.Collections.singletonMap("share", node.get("seller").asText())));
+                            list.add(mapper.writeValueAsBytes(java.util.Collections.singletonMap("share", node.get("buyer").asText())));
+                            shareRecords.put(id, list);
+                            return mapper.writeValueAsBytes(java.util.Collections.singletonMap("success", true));
+                        case 1: // add share
+                            long tid = node.get("transactionId").asLong();
+                            shareRecords.computeIfAbsent(tid, k -> new java.util.ArrayList<>()).add(reqBytes);
+                            return mapper.writeValueAsBytes(java.util.Collections.singletonMap("success", true));
+                        case 5: // get transaction by id
+                            long qid = node.get("id").asLong();
+                            byte[] tx = txStore.get(qid);
+                            if (tx == null) return null;
+                            // For getTransactionById, return a minimal JSON with seller/buyer
+                            com.fasterxml.jackson.databind.node.ObjectNode minimal = mapper.createObjectNode();
+                            com.fasterxml.jackson.databind.JsonNode stored = mapper.readTree(tx);
+                            minimal.put("id", qid);
+                            minimal.put("seller", stored.has("seller") ? stored.get("seller").asText() : "client42");
+                            minimal.put("buyer", stored.has("buyer") ? stored.get("buyer").asText() : "client43");
+                            minimal.put("timestamp", stored.has("timestamp") ? stored.get("timestamp").asLong() : System.currentTimeMillis());
+                            minimal.put("sellerSignature", stored.has("sellerSignature") ? stored.get("sellerSignature").asText() : "");
+                            minimal.put("buyerSignature", stored.has("buyerSignature") ? stored.get("buyerSignature").asText() : "");
+                            return mapper.writeValueAsBytes(minimal);
+                        case 2: // get shares list
+                            long sid = node.get("transactionId").asLong();
+                            java.util.List<byte[]> recs = shareRecords.get(sid);
+                            if (recs == null) return mapper.writeValueAsBytes(new String[]{});
+                            // return list of share names
+                            java.util.List<String> names = new java.util.ArrayList<>();
+                            for (byte[] b : recs) {
+                                try {
+                                    com.fasterxml.jackson.databind.JsonNode n = mapper.readTree(b);
+                                    if (n.has("share")) names.add(n.get("share").asText());
+                                } catch (Exception ex) {
+                                    // try parse different shape
+                                    names.add(new String(b, java.nio.charset.StandardCharsets.UTF_8));
+                                }
+                            }
+                            return mapper.writeValueAsBytes(names);
+                        case 9: // get share records
+                        case 10: // get share records by
+                            long trid = node.get("transactionId").asLong();
+                            java.util.List<byte[]> records = shareRecords.get(trid);
+                            if (records == null) return mapper.writeValueAsBytes(new String[]{});
+                            // return raw records stored
+                            com.fasterxml.jackson.databind.node.ArrayNode arr = mapper.createArrayNode();
+                            for (byte[] b : records) {
+                                try { arr.add(mapper.readTree(b)); } catch (Exception ex) { arr.add(new String(b, java.nio.charset.StandardCharsets.UTF_8)); }
+                            }
+                            return mapper.writeValueAsBytes(arr);
+                        case 11: // getAllTransactionsWithShares
+                            // return all transactions in txStore as array
+                            com.fasterxml.jackson.databind.node.ArrayNode all = mapper.createArrayNode();
+                            for (byte[] b : txStore.values()) {
+                                try { all.add(mapper.readTree(b)); } catch (Exception ex) { }
+                            }
+                            return mapper.writeValueAsBytes(all);
+                        default:
+                            return mapper.writeValueAsBytes(java.util.Collections.singletonMap("success", true));
+                    }
+                } catch (Exception e) {
+                    return "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                }
+            });
 
         // Create a fresh ServerOperations instance for each test overriding keystore loaders
         serverOps = new ServerOperations() {
@@ -439,5 +516,143 @@ public class ServerOperationsTest {
         assertTrue(responseStr.contains("error"));
         
         System.out.println("[TEST] testTransactionMissingRequiredFields passed");
+    }
+
+    // Verify server accepts payloads that include two concatenated signatures (seller + buyer)
+    @Test
+    public void testHandleTransactionRequestWithTwoSignatures() throws Exception {
+        System.out.println("[TEST] testHandleTransactionRequestWithTwoSignatures");
+
+        // DB mock behavior provided by test setup; no override needed here.
+
+        // Build transaction JSON
+        String transactionJson = String.format(
+            "{\"id\":%d,\"timestamp\":%d,\"seller\":\"%s\",\"buyer\":\"%s\",\"product\":\"%s\",\"units\":%d,\"amount\":%d}",
+            2001L, System.currentTimeMillis(), "client42", "client43", "TestMaterial", 10L, 1000L
+        );
+
+        byte[] transactionBytes = transactionJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        // Seller signs
+        Signature sellerSig = Signature.getInstance("SHA256withRSA");
+        sellerSig.initSign(sellerKeyPair.getPrivate());
+        sellerSig.update(transactionBytes);
+        String sellerSignatureB64 = Base64.getEncoder().encodeToString(sellerSig.sign());
+
+        // Buyer signs
+        Signature buyerSig = Signature.getInstance("SHA256withRSA");
+        buyerSig.initSign(buyerKeyPair.getPrivate());
+        buyerSig.update(transactionBytes);
+        String buyerSignatureB64 = Base64.getEncoder().encodeToString(buyerSig.sign());
+
+        // Build header and attach both signatures: header + transaction + {signature:SELLER}{signature:BUYER}
+        String header = String.format("{request_type: transaction, source: %s}", "client42");
+        String sellerSigPart = String.format("{signature:%s}", sellerSignatureB64);
+        String buyerSigPart = String.format("{signature:%s}", buyerSignatureB64);
+
+        byte[] headerBytes = header.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] sellerSigBytes = sellerSigPart.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] buyerSigBytes = buyerSigPart.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        byte[] fullRequest = new byte[headerBytes.length + transactionBytes.length + sellerSigBytes.length + buyerSigBytes.length];
+        System.arraycopy(headerBytes, 0, fullRequest, 0, headerBytes.length);
+        System.arraycopy(transactionBytes, 0, fullRequest, headerBytes.length, transactionBytes.length);
+        System.arraycopy(sellerSigBytes, 0, fullRequest, headerBytes.length + transactionBytes.length, sellerSigBytes.length);
+        System.arraycopy(buyerSigBytes, 0, fullRequest, headerBytes.length + transactionBytes.length + sellerSigBytes.length, buyerSigBytes.length);
+
+        byte[] response = serverOps.processRequest(fullRequest);
+
+        assertNotNull(response);
+        String responseStr = new String(response, java.nio.charset.StandardCharsets.UTF_8);
+        System.out.println("[TEST] Response: " + responseStr);
+        // Expect success because seller (source) provided a valid signature among the two
+        assertTrue(responseStr.contains("success") || responseStr.contains("stored"));
+
+        System.out.println("[TEST] testHandleTransactionRequestWithTwoSignatures passed");
+    }
+
+    // Verify duplicate transactions are rejected to prevent replay attacks
+    @Test
+    public void testDuplicateTransactionRejected() throws Exception {
+        System.out.println("[TEST] testDuplicateTransactionRejected");
+
+        // DB mock behavior provided by test setup; initial DB is empty so first submission will insert.
+
+        byte[] request = createSignedTransactionRequest("client42", 3001L, "client42", "client43",
+            "Steel", 50, 5000, sellerKeyPair.getPrivate());
+
+        // First submission should succeed
+        byte[] response1 = serverOps.processRequest(request);
+        assertNotNull(response1);
+        String r1 = new String(response1, java.nio.charset.StandardCharsets.UTF_8);
+        System.out.println("[TEST] First response: " + r1);
+        assertTrue(r1.contains("success") || r1.contains("stored"));
+
+        // Reconfigure DB stub: next check (sql=5) should return existing transaction
+        apiCallsMock.when(() -> ApiCalls.actAsSender(any(), anyInt(), anyString(), anyInt(),
+            anyString(), any(byte[].class)))
+            .thenReturn("{\"id\":3001,\"seller\":\"client42\",\"buyer\":\"client43\"}".getBytes());
+
+        // Second submission (same id) should be rejected as duplicate
+        byte[] response2 = serverOps.processRequest(request);
+        assertNotNull(response2);
+        String r2 = new String(response2, java.nio.charset.StandardCharsets.UTF_8);
+        System.out.println("[TEST] Second response: " + r2);
+        assertTrue(r2.contains("error") || r2.contains("already") || r2.contains("exists"));
+
+        System.out.println("[TEST] testDuplicateTransactionRejected passed");
+    }
+
+    // Verify server parsing extracts exactly the same transaction bytes that the client signed
+    @Test
+    public void testServerParsesExactTransactionBytes() throws Exception {
+        System.out.println("[TEST] testServerParsesExactTransactionBytes");
+
+        // Use deterministic transaction fields
+        long id = 4001L;
+        long timestamp = System.currentTimeMillis();
+        String seller = "client42";
+        String buyer = "client43";
+        String product = "Graphite";
+        long units = 123L;
+        long amount = 456789L;
+
+        String transactionJson = String.format(
+            "{\"id\":%d,\"timestamp\":%d,\"seller\":\"%s\",\"buyer\":\"%s\",\"product\":\"%s\",\"units\":%d,\"amount\":%d}",
+            id, timestamp, seller, buyer, product, units, amount
+        );
+
+        byte[] transactionBytes = transactionJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        // Seller signs
+        Signature sig = Signature.getInstance("SHA256withRSA");
+        sig.initSign(sellerKeyPair.getPrivate());
+        sig.update(transactionBytes);
+        String sellerSignatureB64 = Base64.getEncoder().encodeToString(sig.sign());
+
+        // Build full request: header + transaction + signature
+        String header = String.format("{request_type: transaction, source: %s}", seller);
+        String sellerSigPart = String.format("{signature:%s}", sellerSignatureB64);
+
+        byte[] headerBytes = header.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] sellerSigBytes = sellerSigPart.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        byte[] fullRequest = new byte[headerBytes.length + transactionBytes.length + sellerSigBytes.length];
+        System.arraycopy(headerBytes, 0, fullRequest, 0, headerBytes.length);
+        System.arraycopy(transactionBytes, 0, fullRequest, headerBytes.length, transactionBytes.length);
+        System.arraycopy(sellerSigBytes, 0, fullRequest, headerBytes.length + transactionBytes.length, sellerSigBytes.length);
+
+        byte[] response = serverOps.processRequest(fullRequest);
+        assertNotNull(response);
+
+        // Get server-parsed bytes and compare
+        byte[] parsed = serverOps.getLastParsedTransactionBytes();
+        assertNotNull("Server did not store parsed transaction bytes", parsed);
+        assertArrayEquals("Parsed transaction bytes differ from original", transactionBytes, parsed);
+
+        String responseStr = new String(response, java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(responseStr.contains("success") || responseStr.contains("stored"));
+
+        System.out.println("[TEST] testServerParsesExactTransactionBytes passed");
     }
 }

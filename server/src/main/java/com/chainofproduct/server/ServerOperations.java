@@ -20,6 +20,13 @@ public class ServerOperations {
     private final String dbHost;
     private final int dbPort;
     private final ObjectMapper jsonMapper;
+    // In-memory cache of stored transaction IDs to provide fast duplicate detection
+    private final java.util.Set<Long> storedTransactionIds = new java.util.HashSet<>();
+    // For tests: last parsed transaction bytes (set on each transaction parse)
+    private volatile byte[] lastParsedTransactionBytes = null;
+
+    // Expose last parsed transaction bytes to tests
+    public byte[] getLastParsedTransactionBytes() { return lastParsedTransactionBytes; }
 
     public ServerOperations() throws Exception {
         
@@ -112,39 +119,61 @@ public class ServerOperations {
             if (source == null) {
                 return errorResponse("Missing source field");
             }
-            System.out.println("DEBUG: Extracted source='" + source + "'");
             
-            // Find where the metadata ends and JSON transaction data begins
-            int jsonStart = requestStr.indexOf("}") + 1;
-            if (jsonStart >= fullRequest.length) {
-                return errorResponse("No transaction data provided");
+            
+            // Parse payload at byte-level to robustly extract transaction JSON and signatures
+            byte[] reqBytes = fullRequest;
+            // find end of header (first '}' character)
+            int headerEnd = -1;
+            for (int i = 0; i < reqBytes.length; i++) {
+                if (reqBytes[i] == (byte)'}') { headerEnd = i; break; }
             }
-            
-            // Extract the full payload after metadata
-            String payload = new String(fullRequest, jsonStart, fullRequest.length - jsonStart, 
-                java.nio.charset.StandardCharsets.UTF_8);
-            
-            // Split payload into: transaction JSON and signature
-            // Format: {...transaction...}{signature:BASE64}
-            // Find the last occurrence of {signature: (may have whitespace before it)
-            int sigStart = payload.lastIndexOf("{signature:");
-            if (sigStart == -1) {
-                return errorResponse("Missing signature");
+            if (headerEnd == -1 || headerEnd + 1 >= reqBytes.length) {
+                return errorResponse("Malformed request: missing JSON payload");
             }
-            
-            // Transaction bytes are from jsonStart to just before {signature:
-            // This includes any whitespace between the transaction JSON and signature
-            int transactionStart = jsonStart;
-            int transactionLength = sigStart;  // sigStart is relative to payload start
-            byte[] transactionBytes = new byte[transactionLength];
-            System.arraycopy(fullRequest, transactionStart, transactionBytes, 0, transactionLength);
-            
-            // Extract transaction JSON for parsing (trim whitespace for field extraction)
-            String transactionJson = payload.substring(0, sigStart).trim();
-            String sigPart = payload.substring(sigStart);
-            
-            String signature = extractField(sigPart, "signature");
-            if (signature == null) {
+
+            int cursor = headerEnd + 1; // start of transaction JSON (should be '{')
+            // Skip any whitespace
+            while (cursor < reqBytes.length && Character.isWhitespace(reqBytes[cursor])) cursor++;
+            if (cursor >= reqBytes.length || reqBytes[cursor] != (byte)'{') {
+                return errorResponse("Malformed request: transaction JSON not found");
+            }
+
+            // Find matching closing brace for the transaction JSON by counting braces
+            int braceCount = 0;
+            int txStart = cursor;
+            int txEnd = -1;
+            for (int i = txStart; i < reqBytes.length; i++) {
+                if (reqBytes[i] == (byte)'{') braceCount++;
+                else if (reqBytes[i] == (byte)'}') braceCount--;
+                if (braceCount == 0) { txEnd = i; break; }
+            }
+            if (txEnd == -1) return errorResponse("Malformed transaction JSON: unmatched braces");
+
+            byte[] transactionBytes = java.util.Arrays.copyOfRange(reqBytes, txStart, txEnd + 1);
+            // store parsed bytes for test-time verification
+            this.lastParsedTransactionBytes = java.util.Arrays.copyOf(transactionBytes, transactionBytes.length);
+            String transactionJson = new String(transactionBytes, java.nio.charset.StandardCharsets.UTF_8);
+
+            // Collect all signature occurrences after transaction JSON
+            java.util.List<String> signatures = new ArrayList<>();
+            int idx = txEnd + 1;
+            while (idx < reqBytes.length) {
+                // skip whitespace
+                while (idx < reqBytes.length && Character.isWhitespace(reqBytes[idx])) idx++;
+                if (idx >= reqBytes.length) break;
+                if (reqBytes[idx] != (byte)'{') break; // no more brace blocks
+                // find end of this small object (assume single-level)
+                int j = idx;
+                while (j < reqBytes.length && reqBytes[j] != (byte)'}') j++;
+                if (j >= reqBytes.length) break;
+                String block = new String(reqBytes, idx, j - idx + 1, java.nio.charset.StandardCharsets.UTF_8);
+                String sig = extractField(block, "signature");
+                if (sig != null) signatures.add(sig);
+                idx = j + 1;
+            }
+
+            if (signatures.isEmpty()) {
                 return errorResponse("Missing signature");
             }
             
@@ -157,7 +186,7 @@ public class ServerOperations {
             long units = extractLongField(transactionJson, "units");
             long amount = extractLongField(transactionJson, "amount");
             
-            System.out.println("DEBUG: Parsed fields - seller=" + seller + ", buyer=" + buyer + ", product=" + product);
+            
             
             if (seller == null || buyer == null || product == null) {
                 return errorResponse("Missing required transaction fields");
@@ -168,21 +197,66 @@ public class ServerOperations {
                 return errorResponse("Access denied: only seller or buyer can submit transaction");
             }
             
-            // SR3: Verify submitter's signature
-            PublicKey sourcePubKey = getCompanyPublicKey(source);
-            
-            System.out.println("DEBUG: transactionBytes length=" + transactionBytes.length);
-            System.out.println("DEBUG: signature length=" + signature.length());
-            
-            if (!verifySignature(transactionBytes, signature, sourcePubKey)) {
-                return errorResponse("Invalid signature from " + source);
+            // Check for duplicate transaction id: if already exists, reject to prevent replay
+            // Fast in-memory check first
+            if (storedTransactionIds.contains(id)) {
+                return errorResponse("Transaction already exists: id=" + id);
+            }
+
+            // Fallback: check database if available
+            ObjectNode checkRequest = jsonMapper.createObjectNode();
+            checkRequest.put("sql", 5);
+            checkRequest.put("id", id);
+            byte[] existing = sendDatabaseRequest(checkRequest);
+            if (existing != null) {
+                try {
+                    JsonNode existingNode = jsonMapper.readTree(existing);
+                    boolean looksLikeTx = existingNode.has("id") || existingNode.has("seller") || existingNode.has("buyer");
+                    if (looksLikeTx) {
+                        return errorResponse("Transaction already exists: id=" + id);
+                    }
+                } catch (Exception _e) {
+                    // If payload isn't JSON or parse fails, continue
+                }
             }
             
-            System.out.println("Storing transaction: id=" + id + ", seller=" + seller + ", buyer=" + buyer + ", submitted by=" + source);
             
-            // Determine who signed (seller or buyer based on source)
-            String sellerSig = source.equals(seller) ? signature : "";
-            String buyerSig = source.equals(buyer) ? signature : "";
+
+            // SR3: Verify signatures found in payload against seller and buyer public keys
+            PublicKey sellerPubKey = getCompanyPublicKey(seller);
+            PublicKey buyerPubKey = getCompanyPublicKey(buyer);
+
+            String sellerSig = "";
+            String buyerSig = "";
+            for (String sigB64 : signatures) {
+                try {
+                    boolean okSeller = false;
+                    try { okSeller = verifySignature(transactionBytes, sigB64, sellerPubKey); } catch (Exception _e) { okSeller = false; }
+                    
+                    if (sellerSig.isEmpty() && okSeller) {
+                        sellerSig = sigB64;
+                    }
+                } catch (Exception e) {
+                    // ignore and continue
+                }
+                try {
+                    boolean okBuyer = false;
+                    try { okBuyer = verifySignature(transactionBytes, sigB64, buyerPubKey); } catch (Exception _e) { okBuyer = false; }
+                    
+                    if (buyerSig.isEmpty() && okBuyer) {
+                        buyerSig = sigB64;
+                    }
+                } catch (Exception e) {
+                    // ignore and continue
+                }
+            }
+
+            boolean sourceVerified = (source.equals(seller) && !sellerSig.isEmpty()) || (source.equals(buyer) && !buyerSig.isEmpty());
+            if (!sourceVerified) {
+                return errorResponse("Invalid signature from " + source);
+            }
+
+            System.out.println("Storing transaction: id=" + id + ", seller=" + seller + ", buyer=" + buyer + ", submitted by=" + source + ", sellerSigPresent=" + (!sellerSig.isEmpty()) + ", buyerSigPresent=" + (!buyerSig.isEmpty()));
             
             // Transactions are stored without at-rest encryption
             // Store in database with signature via TCP (sql=0: insertTransaction)
@@ -199,6 +273,8 @@ public class ServerOperations {
             dbRequest.put("buyerSignature", buyerSig);
             dbRequest.put("data", transactionJson);
             sendDatabaseRequest(dbRequest);
+            // Mark transaction as stored in in-memory cache immediately after DB insert (tests rely on quick in-memory replay protection)
+            storedTransactionIds.add(id);
             
             long shareTime = System.currentTimeMillis();
             String shareData = String.format("%d:%s:server", id, seller);
@@ -212,10 +288,10 @@ public class ServerOperations {
             shareRequest1.put("timestamp", shareTime);
             shareRequest1.put("signature", sellerShareSig);
             sendDatabaseRequest(shareRequest1);
-            
+
             shareData = String.format("%d:%s:server", id, buyer);
             String buyerShareSig = signData(shareData.getBytes(), serverPrivateKey);
-            
+
             ObjectNode shareRequest2 = jsonMapper.createObjectNode();
             shareRequest2.put("sql", 1);
             shareRequest2.put("transactionId", id);
@@ -588,7 +664,18 @@ public class ServerOperations {
      */
     private byte[] sendDatabaseRequest(ObjectNode request) throws Exception {
         byte[] requestBytes = jsonMapper.writeValueAsBytes(request);
-        return ApiCalls.actAsSender(dbHost, dbPort, "server", 0, "db", requestBytes);
+        try {
+            byte[] resp = ApiCalls.actAsSender(dbHost, dbPort, "server", 0, "db", requestBytes);
+            if (resp == null) {
+                System.out.println("DEBUG: sendDatabaseRequest response=null for sql=" + request.get("sql"));
+            } else {
+                System.out.println("DEBUG: sendDatabaseRequest response=" + new String(resp, java.nio.charset.StandardCharsets.UTF_8) + " for sql=" + request.get("sql"));
+            }
+            return resp;
+        } catch (Throwable t) {
+            System.out.println("DEBUG: sendDatabaseRequest threw: " + t.getMessage());
+            throw t;
+        }
     }
 
     // Helper methods for simple string parsing
