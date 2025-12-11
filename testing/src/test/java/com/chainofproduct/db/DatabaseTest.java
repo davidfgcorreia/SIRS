@@ -27,18 +27,18 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 
 public class DatabaseTest {
 
-  public static byte[] tcpRequest(byte[] dataFile) {
+  @BeforeClass
+  public static void setup() throws Exception {
+    com.chainofproduct.utils.Cerificates.main(new String[] { "server" });
+  }
+
+  public static byte[] tcpRequest(byte[] dataFile) throws Exception {
     String host = "127.0.0.1";
     int port = 6767;
     String entityType = "server";
-    int clientNum = 67;
+    int clientNum = 0;
     String receiverEntity = "db";
-    try {
-      return ApiCalls.actAsSender(host, port, entityType, clientNum, receiverEntity, dataFile);
-    } catch (Exception e) {
-      // do something
-    }
-    return "ERROR".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    return ApiCalls.actAsSender(host, port, entityType, clientNum, receiverEntity, dataFile);
   }
 
   @Test
@@ -50,7 +50,7 @@ public class DatabaseTest {
     java.nio.file.Files.write(tempFile, fileContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     dataFile = tempFile.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
     byte[] response = tcpRequest(dataFile);
-    assertEquals(response, null);
+    assertEquals(null, new String(response, java.nio.charset.StandardCharsets.UTF_8));
   }
 
   @Test
