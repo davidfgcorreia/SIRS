@@ -138,16 +138,41 @@ public class ServerOperations {
         }
 
 
-        ObjectNode makegroupdbRequest = jsonMapper.createObjectNode();
-        makegroupdbRequest.put("sql", 8);
-        makegroupdbRequest.put("name", groupName);
-        makegroupdbRequest.put("leader", source);
-
-        byte[] makegroupdbRequestBytes= makegroupdbRequest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        // Check if group already exists (sql:9)
+        boolean groupExists = false;
+        String groupLeader = null;
+        ObjectNode checkGroupRequest = jsonMapper.createObjectNode();
+        checkGroupRequest.put("sql", 9);
+        checkGroupRequest.put("name", groupName);
+        byte[] checkGroupRequestBytes = checkGroupRequest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
         try {
-            responses.add(jsonMapper.readTree(new String(sendDatabaseRequest(makegroupdbRequestBytes), java.nio.charset.StandardCharsets.UTF_8)));
+            String checkGroupRespStr = new String(sendDatabaseRequest(checkGroupRequestBytes), java.nio.charset.StandardCharsets.UTF_8);
+            JsonNode checkGroupResp = jsonMapper.readTree(checkGroupRespStr);
+            // If leader is present and not null, group exists
+            if (checkGroupResp.has("leader") && !checkGroupResp.get("leader").isNull()) {
+                groupExists = true;
+                groupLeader = checkGroupResp.get("leader").asText();
+            }
         } catch (Exception e) {
             return errorResponse("Database request failed: " + e.getMessage());
+        }
+
+        // Only create group if it does not exist
+        if (!groupExists) {
+            ObjectNode makegroupdbRequest = jsonMapper.createObjectNode();
+            makegroupdbRequest.put("sql", 8);
+            makegroupdbRequest.put("name", groupName);
+            makegroupdbRequest.put("leader", source);
+            byte[] makegroupdbRequestBytes = makegroupdbRequest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            try {
+                responses.add(jsonMapper.readTree(new String(sendDatabaseRequest(makegroupdbRequestBytes), java.nio.charset.StandardCharsets.UTF_8)));
+            } catch (Exception e) {
+                return errorResponse("Database request failed: " + e.getMessage());
+            }
+        }
+
+        if (groupExists && !source.equals(groupLeader)) {
+            return errorResponse("Only group leader (" + groupLeader + ") can modify group membership");
         }
 
         // Only send additions if hasAdditions is true
