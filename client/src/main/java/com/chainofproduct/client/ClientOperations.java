@@ -46,8 +46,8 @@ public class ClientOperations {
             payloadBuilder.append("{\"request_type\": \"groupUpdate\", ");
             payloadBuilder.append("\"source\": \"").append(this.clientName).append("\", ");
             payloadBuilder.append("\"group\": \"").append(groupName).append("\", ");
-            payloadBuilder.append("\"groupAdditions\": ").append(listToJsonArray(additions)).append(", ");
-            payloadBuilder.append("\"groupRemove\": ").append(listToJsonArray(removals));
+            payloadBuilder.append("\"groupAdditions\": ").append(listToJsonArrayOrNone(additions)).append(", ");
+            payloadBuilder.append("\"groupRemove\": ").append(listToJsonArrayOrNone(removals));
             payloadBuilder.append("}");
 
             String payload = payloadBuilder.toString();
@@ -64,8 +64,8 @@ public class ClientOperations {
         }
 
         // Helper to convert a list of strings to a JSON array
-        private String listToJsonArray(java.util.List<String> list) {
-            if (list == null) return "[]";
+        private String listToJsonArrayOrNone(java.util.List<String> list) {
+            if (list == null || list.isEmpty()) return "[\"none\"]";
             StringBuilder sb = new StringBuilder();
             sb.append("[");
             for (int i = 0; i < list.size(); i++) {

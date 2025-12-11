@@ -44,7 +44,6 @@ public class ServerOperations {
         
         System.out.println("ServerOperations initialized successfully\n");
     }
-    
 
     /**
      * Main entry point for processing client requests.
@@ -54,14 +53,11 @@ public class ServerOperations {
     public byte[] processRequest(byte[] request, String clientName) {
         try {
             String requestStr = new String(request, java.nio.charset.StandardCharsets.UTF_8);
-            
             // Extract request type from format: {request_type: transaction, ...}
             String requestType = extractField(requestStr, "request_type");
-            
             if (requestType == null) {
                 return errorResponse("Invalid request format - missing request_type");
             }
-            
             switch (requestType) {
                 case "transaction":
                     return handleTransactionRequest(requestStr, request, clientName);
@@ -73,6 +69,8 @@ public class ServerOperations {
                     return handleGetSharesRequest(requestStr);
                 case "getSharesBy":
                     return handleGetSharesByRequest(requestStr);
+                case "groupUpdate":
+                    return handleGroupUpdateRequest(requestStr, clientName);
                 default:
                     return errorResponse("Unknown request type: " + requestType);
             }
@@ -81,6 +79,114 @@ public class ServerOperations {
             e.printStackTrace();
             return errorResponse("Server error: " + e.getMessage());
         }
+    }
+
+
+    
+    /**
+     * Handle group update requests (create, add, remove members).
+     * Accepts a binary JSON payload as described in the prompt.
+     * Dispatches to DB with sql: 9 (create), 10 (add), 11 (remove).
+     */
+    private byte[] handleGroupUpdateRequest(String requestStr, String clientName) {
+        JsonNode jsonHeader;
+
+        try {
+            jsonHeader = jsonMapper.readTree(requestStr);
+        } catch (Exception e) {
+            return errorResponse("Invalid JSON: " + e.getMessage());
+        }
+
+        if (!jsonHeader.has("group")) {
+            return errorResponse("Missing required field: group");
+        }
+
+        if (!jsonHeader.has("source")) {
+            return errorResponse("Missing required field: source");
+        }
+
+        String groupName = jsonHeader.get("group").asText();
+        String source = jsonHeader.get("source").asText();
+        if (!source.equals(clientName)) {
+            return errorResponse("Source does not match authenticated client name");
+        }
+
+        boolean hasAdditions = false;
+        boolean hasRemovals = false;
+        java.util.ArrayList<JsonNode> responses = new java.util.ArrayList<>();
+
+        // Check groupAdditions
+        JsonNode additionsNode = jsonHeader.get("groupAdditions");
+        if (additionsNode != null && additionsNode.isArray()) {
+            int size = additionsNode.size();
+            if (size > 1) {
+                hasAdditions = true;
+            } else if (size == 1 && !additionsNode.get(0).asText().equalsIgnoreCase("none")) {
+                hasAdditions = true;
+            }
+        }
+
+        // Check groupRemove
+        JsonNode removalsNode = jsonHeader.get("groupRemove");
+        if (removalsNode != null && removalsNode.isArray()) {
+            int size = removalsNode.size();
+            if (size > 1) {
+                hasRemovals = true;
+            } else if (size == 1 && !removalsNode.get(0).asText().equalsIgnoreCase("none")) {
+                hasRemovals = true;
+            }
+        }
+
+
+        ObjectNode makegroupdbRequest = jsonMapper.createObjectNode();
+        makegroupdbRequest.put("sql", 8);
+        makegroupdbRequest.put("name", groupName);
+        makegroupdbRequest.put("leader", source);
+
+        byte[] makegroupdbRequestBytes= makegroupdbRequest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        try {
+            responses.add(jsonMapper.readTree(new String(sendDatabaseRequest(makegroupdbRequestBytes), java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            return errorResponse("Database request failed: " + e.getMessage());
+        }
+
+        // Only send additions if hasAdditions is true
+        if (hasAdditions) {
+            ObjectNode addtogroupdbRequest = jsonMapper.createObjectNode();
+            addtogroupdbRequest.put("sql", 10);
+            addtogroupdbRequest.put("name", groupName);
+            addtogroupdbRequest.put("additions", additionsNode.toString());
+            byte[] addtogroupdbRequestBytes = addtogroupdbRequest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            try {
+                responses.add(jsonMapper.readTree(new String(sendDatabaseRequest(addtogroupdbRequestBytes), java.nio.charset.StandardCharsets.UTF_8)));
+            } catch (Exception e) {
+                return errorResponse("Database request failed: " + e.getMessage());
+            }
+        }
+
+        // Only send removals if hasRemovals is true
+        if (hasRemovals) {
+            ObjectNode removefromgroupdbRequest = jsonMapper.createObjectNode();
+            removefromgroupdbRequest.put("sql", 11);
+            removefromgroupdbRequest.put("name", groupName);
+            removefromgroupdbRequest.put("removals", removalsNode.toString());
+            byte[] removefromgroupdbRequestBytes = removefromgroupdbRequest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            try {
+                responses.add(jsonMapper.readTree(new String(sendDatabaseRequest(removefromgroupdbRequestBytes), java.nio.charset.StandardCharsets.UTF_8)));
+            } catch (Exception e) {
+                return errorResponse("Database request failed: " + e.getMessage());
+            }
+        }
+
+        StringBuilder json = new StringBuilder("{\"responses\":[");
+        for (int i = 0; i < responses.size(); i++) {
+            if (i > 0) json.append(",");
+            json.append(responses.get(i).toString());
+        }
+        json.append("]}");
+        return json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        
     }
 
     private byte[] handleTransactionRequest(String requestStr, byte[] fullRequest, String clientName) {
