@@ -163,43 +163,43 @@ public class ServerMainTest {
             .getCertificate(certHolder);
     }
     
-    // verify Main.incrementRequests() updates the internal counter and getMetrics() includes a Requests field.
+    // verify TLSServerListener.incrementRequests() updates the internal counter and getMetrics() includes a Requests field.
     @Test
     public void testIncrementRequests() {
         System.out.println("[TEST] testIncrementRequests");
         
         // Get initial metrics
-        String initialMetrics = Main.getMetrics();
+        String initialMetrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Initial metrics: " + initialMetrics);
         
         // Increment requests
-        Main.incrementRequests();
-        Main.incrementRequests();
-        Main.incrementRequests();
+        TLSServerListener.incrementRequests();
+        TLSServerListener.incrementRequests();
+        TLSServerListener.incrementRequests();
         
         // Verify metrics updated
-        String updatedMetrics = Main.getMetrics();
+        String updatedMetrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Updated metrics: " + updatedMetrics);
         assertTrue(updatedMetrics.contains("Requests: "));
         
         System.out.println("[TEST] testIncrementRequests passed");
     }
     
-    // verify Main.incrementErrors() updates the internal counter and getMetrics() includes an Errors field.
+    // verify TLSServerListener.incrementErrors() updates the internal counter and getMetrics() includes an Errors field.
     @Test
     public void testIncrementErrors() {
         System.out.println("[TEST] testIncrementErrors");
         
         // Get initial metrics
-        String initialMetrics = Main.getMetrics();
+        String initialMetrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Initial metrics: " + initialMetrics);
         
         // Increment errors
-        Main.incrementErrors();
-        Main.incrementErrors();
+        TLSServerListener.incrementErrors();
+        TLSServerListener.incrementErrors();
         
         // Verify metrics updated
-        String updatedMetrics = Main.getMetrics();
+        String updatedMetrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Updated metrics: " + updatedMetrics);
         assertTrue(updatedMetrics.contains("Errors: "));
         
@@ -211,7 +211,7 @@ public class ServerMainTest {
     public void testGetMetrics() {
         System.out.println("[TEST] testGetMetrics");
         
-        String metrics = Main.getMetrics();
+        String metrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Metrics: " + metrics);
         
         // Verify metrics format
@@ -230,17 +230,17 @@ public class ServerMainTest {
         System.out.println("[TEST] testGetMetricsSuccessRateCalculation");
         
         // Clear any previous state by getting baseline
-        String baselineMetrics = Main.getMetrics();
+        String baselineMetrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Baseline metrics: " + baselineMetrics);
         
         // Add some requests and errors
-        Main.incrementRequests();
-        Main.incrementRequests();
-        Main.incrementRequests();
-        Main.incrementRequests();
-        Main.incrementErrors();
+        TLSServerListener.incrementRequests();
+        TLSServerListener.incrementRequests();
+        TLSServerListener.incrementRequests();
+        TLSServerListener.incrementRequests();
+        TLSServerListener.incrementErrors();
         
-        String metrics = Main.getMetrics();
+        String metrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Metrics after updates: " + metrics);
         
         // Verify success rate is calculated (should be 75% if 4 requests, 1 error)
@@ -331,13 +331,13 @@ public class ServerMainTest {
         // Rate limiting allows 100 requests per minute per IP
         
         // We can verify this indirectly through the error counter
-        String initialMetrics = Main.getMetrics();
+        String initialMetrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Initial metrics: " + initialMetrics);
         
         // Simulate successful requests (would pass rate limit)
-        Main.incrementRequests();
+        TLSServerListener.incrementRequests();
         
-        String afterMetrics = Main.getMetrics();
+        String afterMetrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Metrics after request: " + afterMetrics);
         
         assertTrue(afterMetrics.contains("Requests:"));
@@ -354,13 +354,13 @@ public class ServerMainTest {
         // Since checkRateLimit is private, we verify the error counter increases
         // when rate limits would be exceeded
         
-        String initialMetrics = Main.getMetrics();
+        String initialMetrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Initial metrics: " + initialMetrics);
         
         // Simulate rate limit exceeded (would increment errors)
-        Main.incrementErrors();
+        TLSServerListener.incrementErrors();
         
-        String afterMetrics = Main.getMetrics();
+        String afterMetrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Metrics after rate limit error: " + afterMetrics);
         
         assertTrue(afterMetrics.contains("Errors:"));
@@ -407,11 +407,11 @@ public class ServerMainTest {
         System.out.println("[TEST] testMetricsFormatting");
         
         // Test metrics formatting with various values
-        Main.incrementRequests();
-        Main.incrementRequests();
-        Main.incrementErrors();
+        TLSServerListener.incrementRequests();
+        TLSServerListener.incrementRequests();
+        TLSServerListener.incrementErrors();
         
-        String metrics = Main.getMetrics();
+        String metrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Formatted metrics: " + metrics);
         
         // Verify format contains all expected components
@@ -470,7 +470,7 @@ public class ServerMainTest {
     }
     
     // verify metrics thread behavior including periodic reporting and on-demand retrieval.
-    // checking expected metric-reporting interval (60000ms) and that metrics can be retrieved anytime via Main.getMetrics().
+    // checking expected metric-reporting interval (60000ms) and that metrics can be retrieved anytime via TLSServerListener.getMetrics().
     @Test
     public void testMetricsThreadBehavior() {
         System.out.println("[TEST] testMetricsThreadBehavior");
@@ -481,7 +481,7 @@ public class ServerMainTest {
         System.out.println("[TEST] Expected metrics reporting interval: " + expectedReportingInterval + "ms");
         
         // Verify metrics can be retrieved at any time
-        String metrics = Main.getMetrics();
+        String metrics = TLSServerListener.getMetrics();
         assertNotNull(metrics);
         assertFalse(metrics.isEmpty());
         
@@ -502,7 +502,7 @@ public class ServerMainTest {
         for (int i = 0; i < numThreads; i++) {
             threads[i] = new Thread(() -> {
                 for (int j = 0; j < requestsPerThread; j++) {
-                    Main.incrementRequests();
+                    TLSServerListener.incrementRequests();
                 }
             });
         }
@@ -518,7 +518,7 @@ public class ServerMainTest {
         }
         
         // Verify all requests were counted
-        String metrics = Main.getMetrics();
+        String metrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Metrics after concurrent updates: " + metrics);
         assertTrue(metrics.contains("Requests:"));
         
@@ -538,7 +538,7 @@ public class ServerMainTest {
         for (int i = 0; i < numThreads; i++) {
             threads[i] = new Thread(() -> {
                 for (int j = 0; j < errorsPerThread; j++) {
-                    Main.incrementErrors();
+                    TLSServerListener.incrementErrors();
                 }
             });
         }
@@ -554,7 +554,7 @@ public class ServerMainTest {
         }
         
         // Verify all errors were counted
-        String metrics = Main.getMetrics();
+        String metrics = TLSServerListener.getMetrics();
         System.out.println("[TEST] Metrics after concurrent error updates: " + metrics);
         assertTrue(metrics.contains("Errors:"));
         

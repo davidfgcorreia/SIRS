@@ -3,9 +3,6 @@ package com.chainofproduct.server;
 import com.chainofproduct.utils.ApiCalls;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.util.Base64;
-import java.util.List;
-import java.util.ArrayList;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -15,7 +12,6 @@ public class ServerOperations {
     private final String dbHost;
     private final int dbPort;
     private final ObjectMapper jsonMapper;
-    // In-memory cache of stored transaction IDs to provide fast duplicate detection
     private volatile byte[] lastParsedTransactionBytes = null;
 
     // Expose last parsed transaction bytes to tests
@@ -48,6 +44,7 @@ public class ServerOperations {
     /**
      * Main entry point for processing client requests.
      * @param request The decrypted request bytes from client
+     * @param clientName The name of the client making the request (can be null for tests)
      * @return response bytes to send back, or null if no response needed
      */
     public byte[] processRequest(byte[] request, String clientName) {
@@ -359,36 +356,98 @@ public class ServerOperations {
     }
 
     /**
+     * Handle get transaction by ID request with access control (SR1).
+     * Format: {request_type:getById, source: ClientName, transaction_id: 123}
+     */
+    private byte[] handleGetByIdRequest(String requestStr) {
+        try {
+            String source = extractField(requestStr, "source");
+            if (source == null) {
+                source = extractField(requestStr, "servername");
+            }
+            if (source == null) {
+                return errorResponse("Missing source field");
+            }
+            
+            long id = extractLongField(requestStr, "transaction_id");
+            if (id == 0) {
+                return errorResponse("Invalid or missing transaction_id");
+            }
+            
+            // Check access control first (sql=2: getShares)
+            if (!checkTransactionAccess(id, source)) {
+                return errorResponse("Access denied: transaction not shared with you");
+            }
+            
+            // Get transaction via TCP (sql=5: getTransactionById)
+            ObjectNode getRequest = jsonMapper.createObjectNode();
+            getRequest.put("sql", 5);
+            getRequest.put("id", id);
+            byte[] getRequestBytes = jsonMapper.writeValueAsBytes(getRequest);
+            byte[] recBytes = sendDatabaseRequest(getRequestBytes);
+            
+            if (recBytes == null) {
+                return errorResponse("Transaction not found: " + id);
+            }
+            
+            // Return raw DB response (already contains full transaction with signatures)
+            return recBytes;
+        } catch (Exception e) {
+            return errorResponse("Get by ID error: " + e.getMessage());
+        }
+    }   
+
+    /**
      * Handle get all transactions request with access control (SR1).
-     * Uses batch query to avoid N+1 problem.
      * Format: {request_type:getAll, source: ClientName}
      */
     private byte[] handleGetAllRequest(String requestStr) {
         try {
             String source = extractField(requestStr, "source");
-            if (source == null) source = extractField(requestStr, "servername"); // fallback
+            if (source == null) {
+                source = extractField(requestStr, "servername");
+            }
+            if (source == null) {
+                return errorResponse("Missing source field");
+            }
             
-            // Get all transactions with shares in single batch query (sql=11: getAllTransactionsWithShares)
+            // Get all transactions (sql=4: getAllTransactions)
             ObjectNode getAllRequest = jsonMapper.createObjectNode();
-            getAllRequest.put("sql", 11);
-            getAllRequest.put("requester", source);
+            getAllRequest.put("sql", 4);
             byte[] allRequestBytes = jsonMapper.writeValueAsBytes(getAllRequest);
             byte[] allBytes = sendDatabaseRequest(allRequestBytes);
-            JsonNode allRecords = jsonMapper.readTree(allBytes);
             
+            if (allBytes == null) {
+                return errorResponse("Database did not respond");
+            }
+            
+            // Filter transactions by access control
+            JsonNode allTransactions = jsonMapper.readTree(allBytes);
             StringBuilder json = new StringBuilder("{\"transactions\":[");
             boolean first = true;
             
-            if (allRecords.isArray()) {
-                for (JsonNode rec : allRecords) {
-                    if (!first) json.append(",");
-                    first = false;
-                    json.append(String.format(
-                        "{\"id\":%d,\"timestamp\":%d,\"seller\":\"%s\",\"buyer\":\"%s\",\"product\":\"%s\",\"units\":%d,\"amount\":%d,\"seller_signature\":\"%s\",\"buyer_signature\":\"%s\"}",
-                        rec.get("id").asLong(), rec.get("timestamp").asLong(), rec.get("seller").asText(),
-                        rec.get("buyer").asText(), rec.get("product").asText(), rec.get("units").asLong(),
-                        rec.get("amount").asLong(), rec.get("sellerSignature").asText(), rec.get("buyerSignature").asText()
-                    ));
+            if (allTransactions.isArray()) {
+                for (JsonNode txn : allTransactions) {
+                    long txnId = txn.get("id").asLong();
+                    // Check access for each transaction
+                    if (checkTransactionAccess(txnId, source)) {
+                        if (!first) json.append(",");
+                        first = false;
+                        
+                        // Build transaction JSON with proper field names
+                        json.append(String.format(
+                            "{\"id\":%d,\"timestamp\":%d,\"seller\":\"%s\",\"buyer\":\"%s\",\"product\":\"%s\",\"units\":%d,\"amount\":%d,\"seller_signature\":\"%s\",\"buyer_signature\":\"%s\"}",
+                            txn.get("id").asLong(),
+                            txn.get("timestamp").asLong(),
+                            txn.get("seller").asText(),
+                            txn.get("buyer").asText(),
+                            txn.has("product") ? txn.get("product").asText() : "",
+                            txn.has("units") ? txn.get("units").asLong() : 0,
+                            txn.has("amount") ? txn.get("amount").asLong() : 0,
+                            txn.has("sellerSignature") ? txn.get("sellerSignature").asText() : "",
+                            txn.has("buyerSignature") ? txn.get("buyerSignature").asText() : ""
+                        ));
+                    }
                 }
             }
             json.append("]}");
@@ -408,53 +467,63 @@ public class ServerOperations {
         try {
             long id = extractLongField(requestStr, "transaction_id");
             String source = extractField(requestStr, "source");
-            if (source == null) source = extractField(requestStr, "servername"); // fallback
+            if (source == null) {
+                source = extractField(requestStr, "servername");
+            }
+            if (source == null) {
+                return errorResponse("Missing source field");
+            }
+            if (id == 0) {
+                return errorResponse("Invalid or missing transaction_id");
+            }
             
-            // SR1: Check access via TCP
+            // SR1: Check access control first
+            if (!checkTransactionAccess(id, source)) {
+                return errorResponse("Access denied: transaction not shared with you");
+            }
+            
+            // Get transaction to extract metadata (sql=5: getTransactionById)
             ObjectNode getRequest = jsonMapper.createObjectNode();
             getRequest.put("sql", 5);
             getRequest.put("id", id);
             byte[] getRequestBytes = jsonMapper.writeValueAsBytes(getRequest);
             byte[] recBytes = sendDatabaseRequest(getRequestBytes);
+            
             if (recBytes == null) {
                 return errorResponse("Transaction not found");
             }
             
+            JsonNode transaction = jsonMapper.readTree(recBytes);
+            
+            // Get shares list (sql=2: getShares)
             ObjectNode sharesRequest = jsonMapper.createObjectNode();
             sharesRequest.put("sql", 2);
             sharesRequest.put("transactionId", id);
             byte[] sharesRequestBytes = jsonMapper.writeValueAsBytes(sharesRequest);
             byte[] sharesBytes = sendDatabaseRequest(sharesRequestBytes);
+            
             JsonNode sharesNode = jsonMapper.readTree(sharesBytes);
-            List<String> shares = new ArrayList<>();
-            if (sharesNode.isArray()) {
-                for (JsonNode node : sharesNode) {
-                    shares.add(node.asText());
-                }
-            }
-            if (!shares.contains(source)) {
-                return errorResponse("Access denied: transaction not shared with you");
-            }
             
-            // SR4: Get share records with cryptographic proof (sql=9: getShareRecords)
-            ObjectNode shareRecordsRequest = jsonMapper.createObjectNode();
-            shareRecordsRequest.put("sql", 9);
-            shareRecordsRequest.put("transactionId", id);
-            byte[] shareRecordsRequestBytes = jsonMapper.writeValueAsBytes(shareRecordsRequest);
-            byte[] shareRecordsBytes = sendDatabaseRequest(shareRecordsRequestBytes);
-            JsonNode shareRecords = jsonMapper.readTree(shareRecordsBytes);
-            
+            // Build response with share records
             StringBuilder json = new StringBuilder("{\"shares\":[");
-            if (shareRecords.isArray()) {
-                for (int i = 0; i < shareRecords.size(); i++) {
+            if (sharesNode.isArray()) {
+                for (int i = 0; i < sharesNode.size(); i++) {
                     if (i > 0) json.append(",");
-                    JsonNode record = shareRecords.get(i);
+                    String shareName = sharesNode.get(i).asText();
+                    // Determine who shared (seller and buyer are initially shared by server)
+                    String sharedBy = "server";
+                    if (transaction.has("seller") && transaction.has("buyer")) {
+                        String seller = transaction.get("seller").asText();
+                        String buyer = transaction.get("buyer").asText();
+                        if (!shareName.equals(seller) && !shareName.equals(buyer)) {
+                            sharedBy = seller; // Assume additional shares were added by seller
+                        }
+                    }
                     json.append(String.format(
-                        "{\"company\":\"%s\",\"shared_by\":\"%s\",\"timestamp\":%d,\"signature\":\"%s\"}",
-                        record.get("share").asText(),
-                        record.get("sharedBy").asText(),
-                        record.get("timestamp").asLong(),
-                        record.get("signature").asText()
+                        "{\"company\":\"%s\",\"shared_by\":\"%s\",\"timestamp\":%d,\"signature\":\"\"}",
+                        shareName,
+                        sharedBy,
+                        transaction.has("timestamp") ? transaction.get("timestamp").asLong() : 0
                     ));
                 }
             }
@@ -476,49 +545,59 @@ public class ServerOperations {
             long id = extractLongField(requestStr, "transaction_id");
             String sharedBy = extractField(requestStr, "shared_by");
             String source = extractField(requestStr, "source");
-            if (source == null) source = extractField(requestStr, "servername"); // fallback
+            if (source == null) {
+                source = extractField(requestStr, "servername");
+            }
             
+            if (source == null) {
+                return errorResponse("Missing source field");
+            }
             if (sharedBy == null) {
                 return errorResponse("Missing shared_by parameter");
             }
-            
-            // SR1: Check access via TCP (sql=2: getShares)
-            ObjectNode sharesRequest = jsonMapper.createObjectNode();
-            sharesRequest.put("sql", 2);
-            sharesRequest.put("transactionId", id);
-            byte[] sharesRequestBytes = jsonMapper.writeValueAsBytes(sharesRequest);
-            byte[] sharesBytes = sendDatabaseRequest(sharesRequestBytes);
-            JsonNode sharesNode = jsonMapper.readTree(sharesBytes);
-            List<String> shares = new ArrayList<>();
-            if (sharesNode.isArray()) {
-                for (JsonNode node : sharesNode) {
-                    shares.add(node.asText());
-                }
+            if (id == 0) {
+                return errorResponse("Invalid or missing transaction_id");
             }
-            if (!shares.contains(source)) {
+            
+            // SR1: Check access control first
+            if (!checkTransactionAccess(id, source)) {
                 return errorResponse("Access denied: transaction not shared with you");
             }
             
-            // SR4: Get shares by sharedBy with timestamp and signature (sql=10: getShareRecordsBySharedBy)
+            // Get transaction for metadata (sql=5: getTransactionById)
+            ObjectNode getRequest = jsonMapper.createObjectNode();
+            getRequest.put("sql", 5);
+            getRequest.put("id", id);
+            byte[] getRequestBytes = jsonMapper.writeValueAsBytes(getRequest);
+            byte[] recBytes = sendDatabaseRequest(getRequestBytes);
+            
+            if (recBytes == null) {
+                return errorResponse("Transaction not found");
+            }
+            
+            JsonNode transaction = jsonMapper.readTree(recBytes);
+            
+            // Get shares by sharedBy (sql=3: getSharesBySharedBy)
             ObjectNode getByRequest = jsonMapper.createObjectNode();
-            getByRequest.put("sql", 10);
+            getByRequest.put("sql", 3);
             getByRequest.put("transactionId", id);
             getByRequest.put("sharedBy", sharedBy);
             byte[] getByRequestBytes = jsonMapper.writeValueAsBytes(getByRequest);
             byte[] sharesByBytes = sendDatabaseRequest(getByRequestBytes);
-            JsonNode shareRecords = jsonMapper.readTree(sharesByBytes);
             
+            JsonNode sharesNode = jsonMapper.readTree(sharesByBytes);
+            
+            // Build response with filtered shares
             StringBuilder json = new StringBuilder("{\"shares\":[");
-            if (shareRecords.isArray()) {
-                for (int i = 0; i < shareRecords.size(); i++) {
+            if (sharesNode.isArray()) {
+                for (int i = 0; i < sharesNode.size(); i++) {
                     if (i > 0) json.append(",");
-                    JsonNode record = shareRecords.get(i);
+                    String shareName = sharesNode.get(i).asText();
                     json.append(String.format(
-                        "{\"company\":\"%s\",\"shared_by\":\"%s\",\"timestamp\":%d,\"signature\":\"%s\"}",
-                        record.get("share").asText(),
-                        record.get("sharedBy").asText(),
-                        record.get("timestamp").asLong(),
-                        record.get("signature").asText()
+                        "{\"company\":\"%s\",\"shared_by\":\"%s\",\"timestamp\":%d,\"signature\":\"\"}",
+                        shareName,
+                        sharedBy,
+                        transaction.has("timestamp") ? transaction.get("timestamp").asLong() : 0
                     ));
                 }
             }
@@ -531,6 +610,39 @@ public class ServerOperations {
         }
     }
     
+    /**
+     * Helper: Check if source has access to a transaction (SR1).
+     * @param transactionId the transaction ID to check
+     * @param source the entity requesting access
+     * @return true if access granted, false otherwise
+     */
+    private boolean checkTransactionAccess(long transactionId, String source) {
+        try {
+            ObjectNode sharesRequest = jsonMapper.createObjectNode();
+            sharesRequest.put("sql", 2);
+            sharesRequest.put("transactionId", transactionId);
+            byte[] sharesRequestBytes = jsonMapper.writeValueAsBytes(sharesRequest);
+            byte[] sharesBytes = sendDatabaseRequest(sharesRequestBytes);
+            
+            if (sharesBytes == null) {
+                return false;
+            }
+            
+            JsonNode sharesNode = jsonMapper.readTree(sharesBytes);
+            if (sharesNode.isArray()) {
+                for (JsonNode node : sharesNode) {
+                    if (source.equals(node.asText())) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        } catch (Exception e) {
+            System.err.println("Error checking transaction access: " + e.getMessage());
+            return false;
+        }
+    }
+
     /**
      * Helper: Load private key from PKCS12 keystore.
      */
