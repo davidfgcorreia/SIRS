@@ -1,6 +1,5 @@
 package com.chainofproduct.db;
 
-import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 
 import com.chainofproduct.db.DatabaseOperations.DestinationInfo;
@@ -30,21 +29,22 @@ public class ServerExecutorImpl implements ServerExecutor {
    */
   private static List<byte[]> extractJsonObjects(byte[] data) {
     List<byte[]> result = new ArrayList<>();
-
-    int depth = 0;
     int start = -1;
+    int count = 0;
 
     for (int i = 0; i < data.length; i++) {
       byte b = data[i];
 
       if (b == '{') {
-        if (depth == 0) {
-          start = i;
+        start = i;
+        if (count == 1) {
+          result.add(Arrays.copyOfRange(data, i, data.length));
+          return result;
         }
-        depth++;
+
       } else if (b == '}') {
-        depth--;
-        if (depth == 0 && start != -1) {
+        count++;
+        if (start != -1) {
           // Extract the jsonHeader object as raw bytes
           result.add(Arrays.copyOfRange(data, start, i + 1));
         }
@@ -67,7 +67,6 @@ public class ServerExecutorImpl implements ServerExecutor {
     int sql = jsonHeader.get("sql").asInt();
 
     long id;
-    long timestamp;
     String seller;
     String buyer;
 
@@ -81,21 +80,24 @@ public class ServerExecutorImpl implements ServerExecutor {
     int port;
     String publicKey;
 
-    String name;
-    String leader;
+    String name, leader, source, destination;
 
-    List<String> additions;
-    List<String> removals;
+    List<String> additions, removals;
 
     switch (sql) {
       case 0:
         byte[] binaryData = data.get(1);
         id = jsonHeader.get("id").asInt();
-        timestamp = jsonHeader.get("timestamp").asInt();
+        source = jsonHeader.get("source").asText();
+        destination = jsonHeader.get("destination").asText();
         seller = jsonHeader.get("seller").asText();
         buyer = jsonHeader.get("buyer").asText();
+        String sellerOrBuyer = source.equals(seller) ? "seller" : "buyer";
         try {
-          DatabaseOperations.insertTransaction(id, timestamp, seller, buyer, binaryData);
+          DatabaseOperations.insertTransaction(id, seller, buyer, binaryData);
+          DatabaseOperations.addShare(id, seller, "seller", seller);
+          DatabaseOperations.addShare(id, buyer, "buyer", buyer);
+          DatabaseOperations.addShare(id, destination, sellerOrBuyer, source);
           return null;
         } catch (SQLException e) {
           System.err.println("There was a problem realizing the sql query: " + e.getMessage());
@@ -103,12 +105,12 @@ public class ServerExecutorImpl implements ServerExecutor {
           return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         }
 
-      case 1:
+      case 1: // FIXME: legacy code, cause its not used anymore
         transactionId = jsonHeader.get("transactionId").asInt();
         share = jsonHeader.get("share").asText();
         sharedBy = jsonHeader.get("sharedBy").asText();
         try {
-          DatabaseOperations.addShare(transactionId, share, sharedBy);
+          DatabaseOperations.addShare(transactionId, share, "seller", sharedBy);
           return null;
         } catch (SQLException e) {
           System.err.println("There was a problem realizing the sql query: " + e.getMessage());
@@ -163,8 +165,8 @@ public class ServerExecutorImpl implements ServerExecutor {
       case 6:
         companyName = jsonHeader.get("companyName").asText();
         try {
-          DestinationInfo destination = DatabaseOperations.getDestinationInfo(companyName);
-          return mapper.writeValueAsBytes(destination);
+          DestinationInfo dest = DatabaseOperations.getDestinationInfo(companyName);
+          return mapper.writeValueAsBytes(dest);
         } catch (SQLException e) {
           System.err.println("There was a problem realizing the sql query: " + e.getMessage());
           e.printStackTrace();

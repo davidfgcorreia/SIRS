@@ -10,28 +10,30 @@ public class DatabaseOperations {
   private static final String ADMIN_PASSWORD = "TheMostSecurePasswordInTheHistoryOfPasswords";
 
   // sql:0
-  public static void insertTransaction(long id, long timestamp, String seller, String buyer, byte[] raw_file)
+  // id, source, dest, group(boolean), seller, buyer, raw file
+  public static void insertTransaction(long id, String seller, String buyer, byte[] raw_file)
       throws SQLException {
-    String sql = "INSERT INTO transaction (id, timestamp, seller, buyer, raw_file) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING";
+    String sql = "INSERT INTO transaction (id, seller, buyer, raw_file) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING";
     try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
         PreparedStatement pstmt = conn.prepareStatement(sql)) {
       pstmt.setLong(1, id);
-      pstmt.setLong(2, timestamp);
-      pstmt.setString(3, seller);
-      pstmt.setString(4, buyer);
-      pstmt.setBytes(5, raw_file);
+      pstmt.setString(2, seller);
+      pstmt.setString(3, buyer);
+      pstmt.setBytes(4, raw_file);
       pstmt.executeUpdate();
     }
   }
 
   // sql:1
-  public static void addShare(long transactionId, String share, String sharedBy) throws SQLException {
-    String sql = "INSERT INTO transaction_shares (id, share, shared_by) VALUES (?, ?, ?) ON CONFLICT DO NOTHING";
+  public static void addShare(long transactionId, String share, String sharedBy, String sharedName)
+      throws SQLException {
+    String sql = "INSERT INTO transaction_shares (id, share, shared_by, shared_name) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING";
     try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
         PreparedStatement pstmt = conn.prepareStatement(sql)) {
       pstmt.setLong(1, transactionId);
       pstmt.setString(2, share);
       pstmt.setString(3, sharedBy); // 'seller' or 'buyer'
+      pstmt.setString(4, sharedName);
       pstmt.executeUpdate();
     }
   }
@@ -79,7 +81,6 @@ public class DatabaseOperations {
       while (rs.next()) {
         transactions.add(new TransactionRecord(
             rs.getLong("id"),
-            rs.getLong("timestamp"),
             rs.getString("seller"),
             rs.getString("buyer"),
             rs.getBytes("raw_file")));
@@ -98,7 +99,6 @@ public class DatabaseOperations {
         if (rs.next()) {
           return new TransactionRecord(
               rs.getLong("id"),
-              rs.getLong("timestamp"),
               rs.getString("seller"),
               rs.getString("buyer"),
               rs.getBytes("raw_file"));
@@ -223,14 +223,12 @@ public class DatabaseOperations {
   // TransactionRecord inner class for returning transaction data
   public static class TransactionRecord {
     public final long id;
-    public final long timestamp;
     public final String seller;
     public final String buyer;
     public final byte[] raw_file;
 
-    public TransactionRecord(long id, long timestamp, String seller, String buyer, byte[] raw_file) {
+    public TransactionRecord(long id, String seller, String buyer, byte[] raw_file) {
       this.id = id;
-      this.timestamp = timestamp;
       this.seller = seller;
       this.buyer = buyer;
       this.raw_file = raw_file;

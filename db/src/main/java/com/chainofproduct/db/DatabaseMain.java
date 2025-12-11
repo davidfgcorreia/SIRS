@@ -18,6 +18,7 @@ public class DatabaseMain {
   private static final String KEYSTORE_PASSWORD = "changeit";
 
   public static void main(String[] args) {
+    com.chainofproduct.utils.Cerificates.main(new String[] { "db" });
 
     // Start EC keypair and key exchange listener using KeyTransmission (utils
     // package)
