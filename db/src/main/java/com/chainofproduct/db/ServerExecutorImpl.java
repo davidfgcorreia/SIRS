@@ -8,13 +8,18 @@ import com.chainofproduct.db.DatabaseOperations.TransactionRecord;
 import com.chainofproduct.utils.ApiCalls.ServerExecutor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+
 import java.util.List;
+
 import java.util.Arrays;
+import java.util.ArrayList;
 
 public class ServerExecutorImpl implements ServerExecutor {
 
   /*
-   * I assumed that the request is a json, and that the sql query is in the json
+   * I assumed that the request is a jsonHeader, and that the sql query is in the
+   * jsonHeader
    * If not, make it that way cause its easier
    * Alright I've been thinking...
    * a server sends a number that represents the query we gonna execute on
@@ -23,34 +28,43 @@ public class ServerExecutorImpl implements ServerExecutor {
    * of functions
    * that appear there.
    */
+  private static List<byte[]> extractJsonObjects(byte[] data) {
+    List<byte[]> result = new ArrayList<>();
+
+    int depth = 0;
+    int start = -1;
+
+    for (int i = 0; i < data.length; i++) {
+      byte b = data[i];
+
+      if (b == '{') {
+        if (depth == 0) {
+          start = i;
+        }
+        depth++;
+      } else if (b == '}') {
+        depth--;
+        if (depth == 0 && start != -1) {
+          // Extract the jsonHeader object as raw bytes
+          result.add(Arrays.copyOfRange(data, start, i + 1));
+        }
+      }
+    }
+
+    return result;
+  }
+
   @Override
   public byte[] execute(byte[] request) throws Exception {
 
-    int newlineIndex = -1;
-    for (int i = 0; i < request.length; i++) { // before the binary, sql:<number>\n needs to exist
-      if (request[i] == '\n') { // ASCII 10
-        newlineIndex = i;
-        break;
-      }
-    }
-    if (newlineIndex == -1) {
-      throw new IllegalStateException("No newline delimiter found!");
-    }
+    List<byte[]> data = extractJsonObjects(request);
 
-    // Step 2: Extract header text
-    String header = new String(Arrays.copyOfRange(request, 0, newlineIndex),
-        StandardCharsets.UTF_8);
-    int sql = Integer.parseInt(header.split(":")[1]);
-
-    byte[] binaryData = Arrays.copyOfRange(request, newlineIndex + 1, request.length);
-    String text = new String(binaryData, StandardCharsets.UTF_8);
-
-    int endIndex = text.indexOf("}") + 1;
-    String jsonString = text.substring(newlineIndex, endIndex);
-
-    // String jsonString = new String(request, StandardCharsets.UTF_8);
     ObjectMapper mapper = new ObjectMapper();
-    JsonNode json = mapper.readTree(jsonString);
+
+    byte[] header = data.get(0);
+    JsonNode jsonHeader = mapper.readTree(header);
+
+    int sql = jsonHeader.get("sql").asInt();
 
     long id;
     long timestamp;
@@ -67,12 +81,19 @@ public class ServerExecutorImpl implements ServerExecutor {
     int port;
     String publicKey;
 
+    String name;
+    String leader;
+
+    List<String> additions;
+    List<String> removals;
+
     switch (sql) {
       case 0:
-        id = json.get("id").asInt();
-        timestamp = json.get("timestamp").asInt();
-        seller = json.get("seller").asText();
-        buyer = json.get("buyer").asText();
+        byte[] binaryData = data.get(1);
+        id = jsonHeader.get("id").asInt();
+        timestamp = jsonHeader.get("timestamp").asInt();
+        seller = jsonHeader.get("seller").asText();
+        buyer = jsonHeader.get("buyer").asText();
         try {
           DatabaseOperations.insertTransaction(id, timestamp, seller, buyer, binaryData);
           return null;
@@ -83,9 +104,9 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
 
       case 1:
-        transactionId = json.get("transactionId").asInt();
-        share = json.get("share").asText();
-        sharedBy = json.get("sharedBy").asText();
+        transactionId = jsonHeader.get("transactionId").asInt();
+        share = jsonHeader.get("share").asText();
+        sharedBy = jsonHeader.get("sharedBy").asText();
         try {
           DatabaseOperations.addShare(transactionId, share, sharedBy);
           return null;
@@ -96,7 +117,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
 
       case 2:
-        transactionId = json.get("transactionId").asInt();
+        transactionId = jsonHeader.get("transactionId").asInt();
         try {
           List<String> shares = DatabaseOperations.getShares(transactionId);
           return mapper.writeValueAsBytes(shares);
@@ -107,8 +128,8 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
 
       case 3:
-        transactionId = json.get("transactionId").asInt();
-        sharedBy = json.get("sharedBy").asText();
+        transactionId = jsonHeader.get("transactionId").asInt();
+        sharedBy = jsonHeader.get("sharedBy").asText();
         try {
           List<String> shares = DatabaseOperations.getSharesBySharedBy(transactionId, sharedBy);
           return mapper.writeValueAsBytes(shares);
@@ -129,7 +150,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
 
       case 5:
-        id = json.get("id").asInt();
+        id = jsonHeader.get("id").asInt();
         try {
           TransactionRecord transactions = DatabaseOperations.getTransactionById(id);
           return mapper.writeValueAsBytes(transactions);
@@ -140,7 +161,7 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
 
       case 6:
-        companyName = json.get("companyName").asText();
+        companyName = jsonHeader.get("companyName").asText();
         try {
           DestinationInfo destination = DatabaseOperations.getDestinationInfo(companyName);
           return mapper.writeValueAsBytes(destination);
@@ -151,10 +172,10 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
 
       case 7:
-        companyName = json.get("companyName").asText();
-        ip = json.get("ip").asText();
-        port = json.get("port").asInt();
-        publicKey = json.get("publicKey").asText();
+        companyName = jsonHeader.get("companyName").asText();
+        ip = jsonHeader.get("ip").asText();
+        port = jsonHeader.get("port").asInt();
+        publicKey = jsonHeader.get("publicKey").asText();
         try {
           DatabaseOperations.addDestination(companyName, ip, port, publicKey);
           return null;
@@ -165,7 +186,64 @@ public class ServerExecutorImpl implements ServerExecutor {
         }
 
       case 8:
-        return null;
+        name = jsonHeader.get("name").asText();
+        leader = jsonHeader.get("leader").asText();
+        try {
+          DatabaseOperations.addGroup(name, leader);
+          return null;
+        } catch (SQLException e) {
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+      case 9:
+        name = jsonHeader.get("name").asText();
+        try {
+          DatabaseOperations.getGroupLeader(name);
+          return null;
+        } catch (SQLException e) {
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+      case 10:
+        name = jsonHeader.get("name").asText();
+        additions = mapper.readValue(jsonHeader.get("additions").asText(), new TypeReference<List<String>>() {
+        });
+        try {
+          DatabaseOperations.addGroupElements(name, additions);
+          return null;
+        } catch (SQLException e) {
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+      case 11:
+        name = jsonHeader.get("name").asText();
+        removals = mapper.readValue(jsonHeader.get("removals").asText(), new TypeReference<List<String>>() {
+        });
+        try {
+          DatabaseOperations.removeGroupElements(name, removals);
+          return null;
+        } catch (SQLException e) {
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+      case 12:
+        name = jsonHeader.get("name").asText();
+        try {
+          DatabaseOperations.getGroupMembers(name);
+          return null;
+        } catch (SQLException e) {
+          System.err.println("There was a problem realizing the sql query: " + e.getMessage());
+          e.printStackTrace();
+          return "An error has occured".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
 
       default:
         // unrecognizable command (sql)

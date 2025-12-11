@@ -9,6 +9,7 @@ public class DatabaseOperations {
   private static final String ADMIN_USER = "ChainOfProduct_admin";
   private static final String ADMIN_PASSWORD = "TheMostSecurePasswordInTheHistoryOfPasswords";
 
+  // sql:0
   public static void insertTransaction(long id, long timestamp, String seller, String buyer, byte[] raw_file)
       throws SQLException {
     String sql = "INSERT INTO transaction (id, timestamp, seller, buyer, raw_file) VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING";
@@ -23,6 +24,7 @@ public class DatabaseOperations {
     }
   }
 
+  // sql:1
   public static void addShare(long transactionId, String share, String sharedBy) throws SQLException {
     String sql = "INSERT INTO transaction_shares (id, share, shared_by) VALUES (?, ?, ?) ON CONFLICT DO NOTHING";
     try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
@@ -34,6 +36,7 @@ public class DatabaseOperations {
     }
   }
 
+  // sql:2
   public static List<String> getShares(long transactionId) throws SQLException {
     String sql = "SELECT share FROM transaction_shares WHERE id = ?";
     List<String> shares = new ArrayList<>();
@@ -49,6 +52,7 @@ public class DatabaseOperations {
     return shares;
   }
 
+  // sql:3
   public static List<String> getSharesBySharedBy(long transactionId, String sharedBy) throws SQLException {
     String sql = "SELECT share FROM transaction_shares WHERE id = ? AND shared_by = ?";
     List<String> shares = new ArrayList<>();
@@ -65,6 +69,7 @@ public class DatabaseOperations {
     return shares;
   }
 
+  // sql:4
   public static List<TransactionRecord> getAllTransactions() throws SQLException {
     String sql = "SELECT * FROM transaction";
     List<TransactionRecord> transactions = new ArrayList<>();
@@ -83,6 +88,7 @@ public class DatabaseOperations {
     return transactions;
   }
 
+  // sql:5
   public static TransactionRecord getTransactionById(long id) throws SQLException {
     String sql = "SELECT * FROM transaction WHERE id = ?";
     try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
@@ -104,7 +110,7 @@ public class DatabaseOperations {
 
   /**
    * Get destination information (IP, port, public key) for a company name.
-   * Returns null if company not found.
+   * Returns null if company not found. sql:6
    */
   public static DestinationInfo getDestinationInfo(String companyName) throws SQLException {
     String sql = "SELECT ip, port, public_key FROM destination_ips WHERE company = ?";
@@ -126,7 +132,7 @@ public class DatabaseOperations {
 
   /**
    * Add a company to the destination_ips table.
-   * For future purpose?
+   * For future purpose? sql:7
    */
   public static void addDestination(String companyName, String ip, int port, String publicKey) throws SQLException {
     String sql = "INSERT INTO destination_ips (company, ip, port, public_key) VALUES (?, ?, ?, ?) ON CONFLICT (company) DO UPDATE SET ip = ?, port = ?, public_key = ?";
@@ -143,6 +149,7 @@ public class DatabaseOperations {
     }
   }
 
+  // sql:8
   public static void addGroup(String name, String leader) throws SQLException {
     String sql = "INSERT INTO groups (name, leader) VALUES (?, ?) ON CONFLICT (name) DO NOTHING";
     try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
@@ -152,6 +159,7 @@ public class DatabaseOperations {
     }
   }
 
+  // sql:9
   public static String getGroupLeader(String name) throws SQLException {
     String sql = "SELECT leader FROM groups WHERE name = ?";
     try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
@@ -167,6 +175,7 @@ public class DatabaseOperations {
     return null;
   }
 
+  // sql:10
   public static void addGroupElements(String name, List<String> additions) throws SQLException {
     String sql = "INSERT INTO group_members (name, company) VALUES (?, ?)";
     try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
@@ -180,6 +189,7 @@ public class DatabaseOperations {
     }
   }
 
+  // sql:11
   public static void removeGroupElements(String name, List<String> removals) throws SQLException {
     String sql = "DELETE FROM group_members WHERE name = ? AND company = ?";
     try (Connection conn = DriverManager.getConnection(DB_URL, ADMIN_USER, ADMIN_PASSWORD);
@@ -193,6 +203,7 @@ public class DatabaseOperations {
     }
   }
 
+  // sql:12
   public static List<String> getGroupMembers(String name) throws SQLException {
     String sql = "SELECT company FROM group_members WHERE name = ?";
     List<String> response = new ArrayList<>();

@@ -9,6 +9,7 @@ import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 
 import com.chainofproduct.utils.ApiCalls;
+import com.chainofproduct.utils.KeyTransmission;
 
 public class DatabaseMain {
 
@@ -17,6 +18,26 @@ public class DatabaseMain {
   private static final String KEYSTORE_PASSWORD = "changeit";
 
   public static void main(String[] args) {
+
+    // Start EC keypair and key exchange listener using KeyTransmission (utils
+    // package)
+    KeyTransmission keyTransmission = new KeyTransmission();
+    Thread ecKeyExchangeThread = new Thread(() -> {
+      try {
+        // Use serverName as storePrefix, and resolve port for key exchange
+        System.out.println("Starting EC key exchange listener...");
+        com.chainofproduct.utils.ResolveDestinations.DestinationInfo destInfo = com.chainofproduct.utils.ResolveDestinations
+            .resolve("db");
+        int keyExchangePort = destInfo.certPort;
+        keyTransmission.ensureECKeyAndStartListener("db", keyExchangePort);
+        System.out.println("EC key exchange listener started on port " + keyExchangePort);
+      } catch (Exception e) {
+        System.err.println("Failed to start EC key exchange listener: " + e.getMessage());
+        e.printStackTrace();
+      }
+    }, "ECKeyExchangeListener");
+    ecKeyExchangeThread.setDaemon(true);
+    ecKeyExchangeThread.start();
 
     try {
       DatabaseInitializer.initializeDatabase();
